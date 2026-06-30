@@ -15,3 +15,7 @@ __pycache__/
 
 # 忽略建图保存的地图文件
 src/jt_chair/map/
+
+# 忽略 ROS/ROS2 录制的大型传感器数据包
+*.bag
+*.mcap
