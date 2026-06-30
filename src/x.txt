@@ -1,0 +1,87 @@
+colcon build --packages-select jt_chair
+slam_toolbox地图保存指令：
+ros2 service call /slam_toolbox/serialize_map  slam_toolbox/srv/SerializePoseGraph "{filename: '/home/orangepi/slam_ws/src/jt_chair/map/your_map'}"
+
+ros2 run tf2_ros tf2_echo map base_link
+//客厅
+At time 1778556906.886650899
+- Translation: [-1.687, 4.518, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, -0.007, 1.000]
+- Rotation: in RPY (radian) [0.000, 0.000, -0.013]
+- Rotation: in RPY (degree) [0.000, 0.000, -0.760]
+- Matrix:
+  1.000  0.013  0.000 -1.687
+ -0.013  1.000 -0.000  4.518
+ -0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+//厨房
+At time 1778564627.612354301
+- Translation: [4.910, 2.084, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.015, 1.000]
+- Rotation: in RPY (radian) [0.000, -0.000, 0.031]
+- Rotation: in RPY (degree) [0.000, -0.000, 1.775]
+- Matrix:
+  1.000 -0.031  0.000  4.910
+  0.031  1.000  0.000  2.084
+  0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+//厕所
+At time 1778564760.110583290
+- Translation: [3.203, -0.206, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.725, 0.689]
+- Rotation: in RPY (radian) [0.000, -0.000, 1.622]
+- Rotation: in RPY (degree) [0.000, -0.000, 92.949]
+- Matrix:
+ -0.051 -0.999  0.000  3.203
+  0.999 -0.051  0.000 -0.206
+  0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+//卧室
+起点
+At time 1778564923.705048468
+- Translation: [0.100, -0.130, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, -0.167, 0.986]
+- Rotation: in RPY (radian) [0.000, 0.000, -0.335]
+- Rotation: in RPY (degree) [0.000, 0.000, -19.203]
+- Matrix:
+  0.944  0.329  0.000  0.100
+ -0.329  0.944 -0.000 -0.130
+ -0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+
+
+语音助手串口：ttyS4
+
+At time 1779865495.408610626
+- Translation: [0.030, -0.630, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.712, 0.702]
+- Rotation: in RPY (radian) [0.000, -0.000, 1.584]
+- Rotation: in RPY (degree) [0.000, -0.000, 90.780]
+- Matrix:
+ -0.014 -1.000  0.000  0.030
+  1.000 -0.014  0.000 -0.630
+  0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+
+
+  At time 1779865612.658020767
+- Translation: [1.853, -1.122, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.713, 0.701]
+- Rotation: in RPY (radian) [0.000, -0.000, 1.588]
+- Rotation: in RPY (degree) [0.000, -0.000, 90.978]
+- Matrix:
+ -0.017 -1.000  0.000  1.853
+  1.000 -0.017  0.000 -1.122
+  0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000
+
+  At time 1779865668.607544213
+- Translation: [1.837, -0.004, 0.000]
+- Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.699, 0.715]
+- Rotation: in RPY (radian) [0.000, -0.000, 1.548]
+- Rotation: in RPY (degree) [0.000, -0.000, 88.704]
+- Matrix:
+  0.023 -1.000  0.000  1.837
+  1.000  0.023  0.000 -0.004
+  0.000  0.000  1.000  0.000
+  0.000  0.000  0.000  1.000

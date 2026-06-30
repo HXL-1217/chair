@@ -1,0 +1,54 @@
+#pragma once
+
+#include <vector>
+#include <array>
+#include <memory>
+#include <string>
+#include "MotorDevice/MotorDevice.h"
+
+#ifdef USE_ROS2
+#include <rclcpp/rclcpp.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#endif
+
+struct OdometryResult {
+    double vx = 0.0;
+    double vy = 0.0;
+    double omega = 0.0; // yaw rate
+};
+
+class OdometryPublisher {
+public:
+    // wheel positions: vector of (x,y) pairs in robot frame (meters)
+    OdometryPublisher(const std::vector<std::array<double,2>>& wheel_positions, double publish_hz = 20.0, const std::string &frame="odom", const std::string &child_frame="base_link");
+
+    OdometryResult compute(const std::vector<double>& wheel_v, const std::vector<double>& steer_ang);
+
+    // Call periodically from main loop; if compiled with USE_ROS2 and a rclcpp::Node is provided, will publish
+    void spinOnceIfNeeded(const OdometryResult& res);
+
+#ifdef USE_ROS2
+    void attachNode(std::shared_ptr<rclcpp::Node> node);
+#endif
+
+private:
+    std::vector<std::array<double,2>> positions_;
+    double publish_dt_;
+    double last_pub_time_ = 0.0;
+    // integrated pose (meters, radians)
+    double pose_x_ = 0.0;
+    double pose_y_ = 0.0;
+    double pose_yaw_ = 0.0;
+    std::string frame_, child_frame_;
+
+#ifdef USE_ROS2
+    std::shared_ptr<rclcpp::Node> node_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+#endif
+
+    // helpers
+    bool solve3x3(const double A[3][3], const double b[3], double x[3]) const;
+};

@@ -1,0 +1,207 @@
+#include "OdometryPublisher.h"
+#include <cmath>
+#include <chrono>
+#include <iostream>
+
+#ifdef USE_ROS2
+#include <rclcpp/time.hpp>
+#endif
+
+OdometryPublisher::OdometryPublisher(const std::vector<std::array<double,2>>& wheel_positions, double publish_hz, const std::string &frame, const std::string &child_frame)
+    : positions_(wheel_positions), publish_dt_(publish_hz > 0 ? 1.0 / publish_hz : 0.05), frame_(frame), child_frame_(child_frame)
+{
+#ifdef USE_ROS2
+    // node must be attached later with attachNode
+#endif
+}
+
+OdometryResult OdometryPublisher::compute(const std::vector<double>& wheel_v, const std::vector<double>& steer_ang)
+{
+    OdometryResult res;
+    const size_t N = positions_.size();
+    if (wheel_v.size() != N || steer_ang.size() != N) {
+        std::cerr << "Odometry compute: size mismatch" << std::endl;
+        return res;
+    }
+
+    // Build normal equations A^T A and A^T b for unknown [vx, vy, omega]
+    double ATA[3][3] = {0};
+    double ATb[3] = {0};
+
+    for (size_t i = 0; i < N; ++i) {
+        double xi = positions_[i][0];
+        double yi = positions_[i][1];
+        double alpha = steer_ang[i];
+        double vi = wheel_v[i];
+
+        double ai = std::cos(alpha);
+        double bi = std::sin(alpha);
+        double ci = -yi * ai + xi * bi; // contribution of omega
+
+        double row[3] = {ai, bi, ci};
+
+        for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 3; ++c) {
+                ATA[r][c] += row[r] * row[c];
+            }
+            ATb[r] += row[r] * vi;
+        }
+    }
+
+    double x[3];
+    if (solve3x3(ATA, ATb, x)) {
+        res.vx = x[0];
+        res.vy = x[1];
+        res.omega = x[2];
+        return res;
+    }
+
+    // Fallback: if matrix singular (e.g., only two wheels), assume vy = 0 and solve 2x2 for vx and omega
+    // Build 2x2 system using only vx and omega: ai*vx + ci*omega = vi
+    double M[2][2] = {0};
+    double rhs[2] = {0};
+    for (size_t i = 0; i < N; ++i) {
+        double xi = positions_[i][0];
+        double yi = positions_[i][1];
+        double alpha = steer_ang[i];
+        double vi = wheel_v[i];
+        double ai = std::cos(alpha);
+        double ci = -yi * ai + xi * std::sin(alpha);
+        M[0][0] += ai * ai;
+        M[0][1] += ai * ci;
+        M[1][0] += ai * ci;
+        M[1][1] += ci * ci;
+        rhs[0] += ai * vi;
+        rhs[1] += ci * vi;
+    }
+
+    double det = M[0][0]*M[1][1] - M[0][1]*M[1][0];
+    if (std::fabs(det) > 1e-9) {
+        res.vx = ( rhs[0]*M[1][1] - M[0][1]*rhs[1]) / det;
+        res.omega = ( M[0][0]*rhs[1] - rhs[0]*M[1][0]) / det;
+        res.vy = 0.0;
+    } else {
+        // give zero result if unsolvable
+        res.vx = 0.0; res.vy = 0.0; res.omega = 0.0;
+    }
+
+    return res;
+}
+
+void OdometryPublisher::spinOnceIfNeeded(const OdometryResult& res)
+{
+#ifdef USE_ROS2
+    if (!node_) return;
+    // get current time
+    auto now_time = node_->get_clock()->now();
+    double now = now_time.seconds();
+    double dt = 0.0;
+    if (last_pub_time_ > 0.0) dt = now - last_pub_time_;
+    else dt = publish_dt_;
+
+    // integrate pose
+    pose_x_ += res.vx * dt;
+    pose_y_ += res.vy * dt;
+    pose_yaw_ += res.omega * dt;
+    // normalize yaw
+    while (pose_yaw_ > M_PI) pose_yaw_ -= 2.0*M_PI;
+    while (pose_yaw_ <= -M_PI) pose_yaw_ += 2.0*M_PI;
+
+    // rate-limit publish
+    if (now - last_pub_time_ < publish_dt_ && last_pub_time_ > 0.0) {
+        last_pub_time_ = now;
+        return;
+    }
+    last_pub_time_ = now;
+
+    nav_msgs::msg::Odometry msg;
+    msg.header.stamp = now_time;
+    msg.header.frame_id = frame_;
+    msg.child_frame_id = child_frame_;
+
+    // fill pose
+    msg.pose.pose.position.x = pose_x_;
+    msg.pose.pose.position.y = pose_y_;
+    msg.pose.pose.position.z = 0.0;
+    // quaternion from yaw
+    double cy = std::cos(pose_yaw_ * 0.5);
+    double sy = std::sin(pose_yaw_ * 0.5);
+    msg.pose.pose.orientation.x = 0.0;
+    msg.pose.pose.orientation.y = 0.0;
+    msg.pose.pose.orientation.z = sy;
+    msg.pose.pose.orientation.w = cy;
+
+    // twist (instantaneous)
+    msg.twist.twist.linear.x = res.vx;
+    msg.twist.twist.linear.y = res.vy;
+    msg.twist.twist.angular.z = res.omega;
+
+    pub_->publish(msg);
+
+    geometry_msgs::msg::TransformStamped t;
+    t.header.stamp = msg.header.stamp;
+    t.header.frame_id = frame_;
+    t.child_frame_id = child_frame_;
+    t.transform.translation.x = pose_x_;
+    t.transform.translation.y = pose_y_;
+    t.transform.translation.z = 0.0;
+    t.transform.rotation = msg.pose.pose.orientation;
+
+    tf_broadcaster_->sendTransform(t);
+#else
+    // no-ROS mode: integrate using steady clock and print full odom
+    static double last = 0.0;
+    double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    double dt = last > 0.0 ? now - last : publish_dt_;
+    last = now;
+
+    pose_x_ += res.vx * dt;
+    pose_y_ += res.vy * dt;
+    pose_yaw_ += res.omega * dt;
+    while (pose_yaw_ > M_PI) pose_yaw_ -= 2.0*M_PI;
+    while (pose_yaw_ <= -M_PI) pose_yaw_ += 2.0*M_PI;
+
+    static double last_print = 0.0;
+    if (now - last_print < publish_dt_) return;
+    last_print = now;
+    printf("[ODOM] x=%.4f m, y=%.4f m, yaw=%.4f rad, vx=%.4f m/s, vy=%.4f m/s, omega=%.4f rad/s\n",
+           pose_x_, pose_y_, pose_yaw_, res.vx, res.vy, res.omega);
+#endif
+}
+
+#ifdef USE_ROS2
+void OdometryPublisher::attachNode(std::shared_ptr<rclcpp::Node> node)
+{
+    node_ = node;
+    pub_ = node_->create_publisher<nav_msgs::msg::Odometry>("/wheelchair/odometry", 10);
+    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+}
+#endif
+
+bool OdometryPublisher::solve3x3(const double A[3][3], const double b[3], double x[3]) const
+{
+    // Gaussian elimination for 3x3
+    double M[3][4];
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) M[r][c] = A[r][c];
+        M[r][3] = b[r];
+    }
+
+    // forward elimination
+    for (int i = 0; i < 3; ++i) {
+        // find pivot
+        int piv = i;
+        for (int r = i+1; r < 3; ++r) if (fabs(M[r][i]) > fabs(M[piv][i])) piv = r;
+        if (fabs(M[piv][i]) < 1e-12) return false; // singular
+        if (piv != i) for (int c = i; c < 4; ++c) std::swap(M[i][c], M[piv][c]);
+        double diag = M[i][i];
+        for (int c = i; c < 4; ++c) M[i][c] /= diag;
+        for (int r = 0; r < 3; ++r) if (r != i) {
+            double factor = M[r][i];
+            for (int c = i; c < 4; ++c) M[r][c] -= factor * M[i][c];
+        }
+    }
+
+    for (int i = 0; i < 3; ++i) x[i] = M[i][3];
+    return true;
+}

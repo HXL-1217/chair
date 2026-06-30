@@ -1,0 +1,157 @@
+slam_toolbox:
+  ros__parameters:
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ---------- ROS Parameters ----------
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_merged
+    mode: localization
+
+    # map_file_name: /home/orangepi/slam_ws/src/jt_chair/map/my_new_map
+    map_start_pose: [0.0, 0.0, 0.0]
+    
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.01  # [优化] 100Hz 的 TF 刷新率，喂饱 MPPI 控制器
+    map_update_interval: 1.0        # 定位模式下此参数影响不大，保持 1.0 即可
+    resolution: 0.05
+    restamp_tf: true                
+    min_laser_range: 0.15
+    max_laser_range: 15.0
+
+    minimum_time_interval: 0.05     # [优化] 匹配双雷达的 20Hz 高频输入
+    transform_timeout: 0.1          # [优化] 降低延迟，提升动态避障响应
+    tf_buffer_duration: 30.
+    stack_size_to_use: 40000000 
+
+    # ---------- General Parameters ----------
+    use_scan_matching: true
+    use_scan_barycenter: true
+    
+    # [防崩溃/防抖优化] 调大触发阈值，防止原地轻微晃动时频繁匹配导致越界崩溃
+    minimum_travel_distance: 0.15
+    minimum_travel_heading: 0.05    
+    
+    scan_buffer_size: 20            # [优化] 利用板子大内存，防止 RK3588 调度时的偶发丢帧
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1  
+    link_scan_maximum_distance: 1.5
+    
+    # 定位模式下，这个开关用于“全局重定位”(Relocalization)
+    do_loop_closing: true           
+    loop_match_minimum_chain_size: 10 # [优化] 从 3 提高到 10，防止轮椅在走廊里发生“误匹配跳跃”
+    loop_match_maximum_variance_coarse: 3.0  
+    loop_match_minimum_response_coarse: 0.35    
+    loop_match_minimum_response_fine: 0.45
+
+    # ---------- Correlation Parameters ----------
+    correlation_search_space_dimension: 0.3  # [优化] 日常局部定位时缩小搜索范围，降低 CPU 消耗
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.03 
+
+    # 被绑架/迷失时的找回参数
+    loop_search_space_dimension: 10.0  # [优化] 增大找回范围。如果开机位置不对，轮椅能更快纠正
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+    loop_search_maximum_distance: 5.0  # [优化] 配合双雷达的大视野
+
+    # ---------- Scan Matcher Parameters (防长廊漂移核心药方) ----------
+    # [防漂移核心修复] 极其严厉的距离惩罚！在走廊里强行逼迫定位算法服从轮式里程计
+    distance_variance_penalty: 1.5      
+    angle_variance_penalty: 1.5        # 增加角度惩罚。防止长走廊里发生旋转漂移
+
+    fine_search_angle_offset: 0.00349     
+    coarse_search_angle_offset: 0.349   
+    coarse_angle_resolution: 0.0349        
+    
+    # [防漂移核心修复] 增加绝对惩罚权重，彻底锁死对里程计的服从度
+    minimum_angle_penalty: 0.8
+    minimum_distance_penalty: 0.7
+    
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1
+
+
+# slam_toolbox:
+#   ros__parameters:
+#     solver_plugin: solver_plugins::CeresSolver
+#     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+#     ceres_preconditioner: SCHUR_JACOBI
+#     ceres_trust_strategy: LEVENBERG_MARQUARDT
+#     ceres_dogleg_type: TRADITIONAL_DOGLEG
+#     ceres_loss_function: None
+
+#     # ROS Parameters
+#     odom_frame: odom
+#     map_frame: map
+#     base_frame: base_link
+#     scan_topic: /scan_merged
+#     mode: localization
+
+#     # [关键] 定位模式下，你必须告诉算法地图在哪里！
+#     # 请取消下面这行的注释，并填入你刚刚跑完图保存的绝对路径（不带 .yaml 后缀）
+#     # map_file_name: /home/orangepi/slam_ws/src/jt_chair/map/my_new_map
+#     map_start_pose: [0.0, 0.0, 0.0]
+    
+#     debug_logging: false
+#     throttle_scans: 1
+#     transform_publish_period: 0.01  # [优化] 100Hz 的 TF 刷新率，喂饱 MPPI 控制器
+#     map_update_interval: 1.0        # 定位模式下此参数影响不大，保持 1.0 即可
+#     resolution: 0.05
+    
+#     # [关键修复] 原配置为 false，务必改为 true！这能消除 TF 坐标树的时间戳抖动
+#     restamp_tf: true                
+    
+#     min_laser_range: 0.2
+#     max_laser_range: 25.0
+#     minimum_time_interval: 0.05     # [优化] 匹配双雷达的 20Hz 高频输入
+#     transform_timeout: 0.1          # [优化] 降低延迟，提升动态避障响应
+#     tf_buffer_duration: 30.
+#     stack_size_to_use: 40000000 
+
+#     # General Parameters
+#     use_scan_matching: true
+#     use_scan_barycenter: true
+#     minimum_travel_distance: 0.1
+#     minimum_travel_heading: 0.05    # [优化] 轮椅转向较慢，更精细的角度触发能提升航向精度
+#     scan_buffer_size: 20            # [优化] 利用板子大内存，防止 RK3588 调度时的偶发丢帧
+#     scan_buffer_maximum_scan_distance: 10.0
+#     link_match_minimum_response_fine: 0.1  
+#     link_scan_maximum_distance: 1.5
+#     do_loop_closing: true           # 定位模式下，这个开关用于“全局重定位”(Relocalization)
+#     loop_match_minimum_chain_size: 10 # [优化] 从 3 提高到 10，防止轮椅走廊里发生“误匹配跳跃”
+#     loop_match_maximum_variance_coarse: 3.0  
+#     loop_match_minimum_response_coarse: 0.35    
+#     loop_match_minimum_response_fine: 0.45
+
+#     # Correlation Parameters - Correlation Parameters
+#     correlation_search_space_dimension: 0.3  # [优化] 日常局部定位时缩小搜索范围，降低 CPU 消耗
+#     correlation_search_space_resolution: 0.01
+#     correlation_search_space_smear_deviation: 0.03 # [优化] 配合缩小
+
+#     # Correlation Parameters - Loop Closure Parameters (被绑架/迷失时的找回参数)
+#     loop_search_space_dimension: 10.0  # [优化] 增大找回范围。如果开机位置不对，轮椅能更快纠正
+#     loop_search_space_resolution: 0.05
+#     loop_search_space_smear_deviation: 0.03
+#     loop_search_maximum_distance: 5.0  # [优化] 配合双雷达的大视野
+
+#     # Scan Matcher Parameters
+#     distance_variance_penalty: 0.5      
+#     angle_variance_penalty: 1.5        # [优化] 增加角度惩罚。在长直走廊定位时，防止地图发生旋转漂移
+
+#     fine_search_angle_offset: 0.00349     
+#     coarse_search_angle_offset: 0.349   
+#     coarse_angle_resolution: 0.0349        
+#     minimum_angle_penalty: 0.9
+#     minimum_distance_penalty: 0.5
+#     use_response_expansion: true
+#     min_pass_through: 2
+#     occupancy_threshold: 0.1

@@ -1,0 +1,45 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 20.0  # [优化] EKF 计算频率，通常 50Hz 足够
+    sensor_timeout: 0.1
+    two_d_mode: true # [关键] 轮椅是在 2D 地面移动的，忽略 Z 轴、Roll 和 Pitch
+    
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    
+    print_diagnostics: true
+    debug: false
+
+    map_frame: map              
+    odom_frame: odom            
+    base_link_frame: base_link  
+    world_frame: odom           
+
+    odom0: /odom
+    # 矩阵含义: [X, Y, Z, Roll, Pitch, Yaw, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
+    # 我们只信任轮子给出的 速度(Vx, Vy) 和 角速度(Vyaw)。
+    # 为什么不信任绝对位置 X, Y？因为轮子打滑会导致绝对位置跳变，用速度积分更平滑。
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,  # [关键] 开启 Vx 和 Vy(螃蟹步横移)
+                   false, false, true,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    imu0: /imu/data
+    # 我们信任 IMU 给出的绝对航向角(Yaw) 和 角速度(Vyaw)。
+    # 绝不要信任 IMU 的 X/Y 加速度，民用级 IMU 的加速度积分会在 5 秒内飘到姥姥家！
+    imu0_config: [false, false, false,
+                  false, false, true,   # [关键] 开启绝对航向角 Yaw (如果有地磁计的话)
+                  false, false, false,
+                  false, false, true,   # [关键] 开启角速度 Vyaw (陀螺仪数据极其精准)
+                  false, false, false]
+    imu0_queue_size: 10
+    imu0_nodelay: false
+    imu0_differential: false # 如果你的 IMU 没有磁力计(找不准正北)，把 Yaw 设为 false
+    imu0_relative: true      # 设为 true，让 IMU 的第一帧 Yaw 作为 0 度基准，防止开机车头乱转
+    
+    # 是否将 IMU 的加速度融合进位姿？千万选 false。
+    use_control: false

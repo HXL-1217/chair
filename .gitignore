@@ -1,0 +1,17 @@
+# ROS 2 编译生成的缓存和安装目录
+build/
+install/
+log/
+
+# Python 编译缓存（如果是 Python 节点）
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# C++ 编译目标文件
+*.o
+*.a
+*.so
+
+# 忽略建图保存的地图文件
+src/jt_chair/map/
