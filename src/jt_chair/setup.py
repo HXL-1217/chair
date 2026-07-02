@@ -62,9 +62,16 @@ setup(
     # [修改点 2] 这里是注册节点的灵魂！
     # 它的意思是：在 jt_chair 文件夹下的 voice_nav_bridge.py 里找 main 函数，
     # 把它编译成一个叫 voice_nav_bridge 的可执行节点。
+    # entry_points={
+    #     'console_scripts': [
+    #         'voice_nav_bridge = jt_chair.voice_nav_bridge:main'
+    #     ],
+    # },
+
+
     entry_points={
-        'console_scripts': [
-            'voice_nav_bridge = jt_chair.voice_nav_bridge:main'
-        ],
-    },
+    'console_scripts': [
+        'voice_nav_bridge = jt_chair.voice_nav_core:main',
+    ],
+},
 )

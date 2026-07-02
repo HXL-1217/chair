@@ -190,7 +190,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
 
-    map_file = "/home/orangepi/slam_ws/src/jt_chair/map/test_1"  # 指向你的 posegraph 文件，注意路径和文件名
+    map_file = "/home/orangepi/slam_ws/src/jt_chair/map/ysg"  # 指向你的 posegraph 文件，注意路径和文件名
 
     ekf_config_file = os.path.join(jt_chair_share, 'config', 'ekf.yaml')
 
