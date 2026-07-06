@@ -62,10 +62,29 @@ class VoiceNavBridge(Node):
         # 4. 闭环控制参数
         # ==========================================
         self.feedback_hex = 0x01 
-        self.Kp_yaw = 0.6  
-        self.Kd_yaw = 0.3  
+        self.Kp_yaw = 0.6
+        self.Kd_yaw = 0.3
         self.prev_yaw_error = 0.0
-        self.exit_start_pose = None 
+        self.exit_start_pose = None
+
+        # ==========================================
+        # 4b. PID 巡迹过门控制参数
+        # ==========================================
+        self.door_entry_pose = None
+        self.door_exit_pose = None
+        self.door_room_pose = None
+        self.door_line_length = 0.0
+        self.door_line_angle = 0.0
+        self.door_start_time = None
+        self.door_prev_error = 0.0
+
+        self.Kp_cross = 1.5
+        self.Kp_heading = 0.8
+
+        # 追踪当前所在房间（用于判断是否需要先PID出门）
+        self.current_room_code = None
+        # 暂存待处理的目标（出发房门PID出门后再执行）
+        self.pending_destination = None 
 
         # ==========================================
         # 5. ROS 2 接口定义
@@ -110,10 +129,37 @@ class VoiceNavBridge(Node):
                     if "toilet_dock_target" in data:
                         self.toilet_dock_target = data["toilet_dock_target"]
                     if "location_map" in data:
-                        for k_str, pose in data["location_map"].items():
-                            k_int = int(k_str) 
+                        for k_str, loc_data in data["location_map"].items():
+                            k_int = int(k_str)
                             if k_int in self.location_map:
-                                self.location_map[k_int]['pose'] = pose
+                                if isinstance(loc_data, dict):
+                                    if 'pose' in loc_data:
+                                        self.location_map[k_int]['pose'] = loc_data['pose']
+                                    if 'door' in loc_data:
+                                        door = loc_data['door']
+                                        # 新格式 outside/inside → 自动计算方向，转为内部 entry/exit
+                                        if 'outside' in door and 'inside' in door:
+                                            ox, oy = door['outside'][0], door['outside'][1]
+                                            ix, iy = door['inside'][0], door['inside'][1]
+                                            yaw = math.atan2(iy - oy, ix - ox)
+                                            door = {
+                                                'entry': [ox, oy, yaw],
+                                                'exit':  [ix, iy, yaw],
+                                            }
+                                        self.location_map[k_int]['door'] = door
+                                        self.get_logger().info(
+                                            f"[Config] 🚪 房间 '{self.location_map[k_int]['name']}' "
+                                            f"已加载过门配置: entry={door['entry']}, "
+                                            f"exit={door['exit']}"
+                                        )
+                                    if 'polygon' in loc_data:
+                                        self.location_map[k_int]['polygon'] = loc_data['polygon']
+                                        self.get_logger().info(
+                                            f"[Config] 📐 房间 '{self.location_map[k_int]['name']}' "
+                                            f"已加载多边形区域: {len(loc_data['polygon'])}个顶点"
+                                        )
+                                else:
+                                    self.location_map[k_int]['pose'] = loc_data
                 self.get_logger().info(f"[Config] 💾 成功从硬盘恢复历史坐标！文件路径: {self.config_path}")
             except Exception as e:
                 self.get_logger().error(f"[Config] ❌ 读取配置文件失败: {e}")
@@ -126,7 +172,20 @@ class VoiceNavBridge(Node):
             if not os.path.exists(config_dir):
                 os.makedirs(config_dir)
 
-            loc_poses = {str(k): v['pose'] for k, v in self.location_map.items()}
+            loc_poses = {}
+            for k, v in self.location_map.items():
+                entry = {"pose": v['pose']}
+                if 'door' in v:
+                    # 保存为简化格式 outside/inside（仅存 x,y，方向自动计算）
+                    d = v['door']
+                    entry['door'] = {
+                        'outside': [d['entry'][0], d['entry'][1]],
+                        'inside':  [d['exit'][0],  d['exit'][1]],
+                    }
+                if 'polygon' in v:
+                    entry['polygon'] = v['polygon']
+                loc_poses[str(k)] = entry
+
             data = {
                 "toilet_dock_target": self.toilet_dock_target,
                 "location_map": loc_poses
@@ -353,19 +412,94 @@ class VoiceNavBridge(Node):
 
                         target = self.location_map[cmd_hex]
                         self.current_target_name = target['name']
-                        self.state = 'NAVIGATING'
-                        self.is_waiting = True
-                        
-                        self.get_logger().info(f"[Trigger] 目标分配: {self.current_target_name}。保护期起算(3.0s)...")
-                        
-                        def execute_delayed_nav():
-                            self.get_logger().info("[System] 发起 Nav2 目标规划请求。")
-                            self.send_goal(target['pose'])
-                            self.is_waiting = False
-                            self.ser.reset_input_buffer() 
 
-                        timer = threading.Timer(3.0, execute_delayed_nav)
-                        timer.start()
+                        # --- 每次导航都检测当前所在房间（多边形判断） ---
+                        detected = self._detect_current_room()
+                        if detected is not None:
+                            self.current_room_code = detected
+
+                        # --- 检查是否需要先从当前房间 PID 出门 ---
+                        need_source_exit = False
+                        # 0x31 和 0x35 是同一个物理区域（厕所），同区域不需要出门/进门
+                        same_area = (self.current_room_code in [0x31, 0x35]
+                                     and cmd_hex in [0x31, 0x35])
+                        if (self.current_room_code is not None
+                            and self.current_room_code != cmd_hex
+                            and self.current_room_code != 0x35
+                            and not same_area):
+                            source_room = self.location_map.get(self.current_room_code)
+                            if source_room and 'door' in source_room:
+                                need_source_exit = True
+                                # 出门两步走: Nav2到门内侧 → PID巡迹到门外侧
+                                # door.exit=inside(房内), door.entry=outside(房外)
+                                ex_door = source_room['door']['exit']   # inside
+                                en_door = source_room['door']['entry']  # outside
+                                # 出门方向 yaw = 从inside指向outside（与进门相反）
+                                exit_yaw = math.atan2(en_door[1] - ex_door[1],
+                                                       en_door[0] - ex_door[0])
+                                self.door_entry_pose = [ex_door[0], ex_door[1], exit_yaw]
+                                self.door_exit_pose = [en_door[0], en_door[1], exit_yaw]
+                                self.door_room_pose = None
+                                self.state = 'NAVIGATING_TO_SOURCE_DOOR'
+                                self.is_waiting = True
+                                # 暂存目标信息，出门完成后再处理
+                                self.pending_destination = {
+                                    'cmd_hex': cmd_hex,
+                                    'target': target,
+                                }
+                                self.get_logger().info(
+                                    f"[Trigger] 先导航到 '{source_room['name']}' 门内侧"
+                                    f"({self.door_entry_pose})，再PID出门。"
+                                    f"目标 '{target['name']}' 待出门后执行。"
+                                )
+
+                                def execute_source_door_nav():
+                                    self.get_logger().info("[System] 发起 Nav2 → 源房门内侧。")
+                                    self.send_goal(self.door_entry_pose)
+                                    self.is_waiting = False
+                                    self.ser.reset_input_buffer()
+
+                                timer = threading.Timer(3.0, execute_source_door_nav)
+                                timer.start()
+                                self.ser.reset_input_buffer()
+
+                        if not need_source_exit:
+                            # --- 无源房门，直接处理目标 ---
+                            # 0x35 厕所倒车 与 0x31 厕所共享同一个物理位置和门
+                            # 但如果已在同区域（厕所内），不需要再进门
+                            door_target = target
+                            if cmd_hex == 0x35 and 'door' not in target:
+                                toilet_room = self.location_map.get(0x31)
+                                if toilet_room and 'door' in toilet_room:
+                                    door_target = toilet_room  # 复用 0x31 的门配置
+
+                            has_door = ('door' in door_target and not same_area)
+                            if has_door:
+                                self.door_entry_pose = door_target['door']['entry']
+                                self.door_exit_pose = door_target['door']['exit']
+                                self.door_room_pose = target['pose']
+                                self.state = 'NAVIGATING_TO_DOOR'
+                                self.get_logger().info(
+                                    f"[Trigger] 目标: {self.current_target_name} (含过门)。"
+                                    f"门前点: {self.door_entry_pose}, 门后点: {self.door_exit_pose}"
+                                )
+                            else:
+                                self.state = 'NAVIGATING'
+
+                            self.is_waiting = True
+                            self.get_logger().info(f"[Trigger] 目标分配: {self.current_target_name}。保护期起算(3.0s)...")
+
+                            def execute_delayed_nav():
+                                self.get_logger().info("[System] 发起 Nav2 目标规划请求。")
+                                if self.state == 'NAVIGATING_TO_DOOR':
+                                    self.send_goal(self.door_entry_pose)
+                                else:
+                                    self.send_goal(target['pose'])
+                                self.is_waiting = False
+                                self.ser.reset_input_buffer()
+
+                            timer = threading.Timer(3.0, execute_delayed_nav)
+                            timer.start()
 
                     else:
                         if cmd_hex not in self.mode_codes and cmd_hex not in self.speed_codes:
@@ -410,9 +544,48 @@ class VoiceNavBridge(Node):
 
     def goal_result_callback(self, future):
         status = future.result().status
-        if status == 4: 
+        if status == 4:  # SUCCEEDED
             self.get_logger().info('[Action] 全局导航阶段到达。')
-            
+
+            # --- 三步流程第1步完成: 到达门前点，启动 PID 巡迹过门 ---
+            if self.state == 'NAVIGATING_TO_DOOR':
+                self.get_logger().info("[System] 到达门前点，启动PID巡迹过门序列。")
+                self.state = 'DOOR_PASSING'
+                self.door_start_time = time.time()
+                self.door_prev_error = 0.0
+                ex, ey = self.door_entry_pose[0], self.door_entry_pose[1]
+                dx = self.door_exit_pose[0] - ex
+                dy = self.door_exit_pose[1] - ey
+                self.door_line_length = math.hypot(dx, dy)
+                self.door_line_angle = math.atan2(dy, dx)
+                self.get_logger().info(
+                    f"[Door] 线段长度: {self.door_line_length:.3f}m, "
+                    f"方向角: {math.degrees(self.door_line_angle):.1f}°"
+                )
+                return
+
+            # --- 出门流程第1步完成: 到达源房门内侧，启动 PID 出门 ---
+            if self.state == 'NAVIGATING_TO_SOURCE_DOOR':
+                self.get_logger().info("[System] 到达源房门内侧，启动PID出门序列。")
+                self.state = 'DOOR_EXITING'
+                self.door_start_time = time.time()
+                self.door_prev_error = 0.0
+                ex, ey = self.door_entry_pose[0], self.door_entry_pose[1]
+                dx = self.door_exit_pose[0] - ex
+                dy = self.door_exit_pose[1] - ey
+                self.door_line_length = math.hypot(dx, dy)
+                self.door_line_angle = math.atan2(dy, dx)
+                self.get_logger().info(
+                    f"[Door] 出门线段长度: {self.door_line_length:.3f}m, "
+                    f"方向角: {math.degrees(self.door_line_angle):.1f}°"
+                )
+                return
+
+            # --- 三步流程第3步完成: 到达房间目标 ---
+            if self.state == 'NAVIGATING_TO_ROOM':
+                self.get_logger().info('[Action] 导航至房间目标完成。')
+
+            # 厕所倒车模式处理 (NAVIGATING_TO_ROOM 或 NAVIGATING 都可能触发)
             if self.current_target_name == "厕所倒车模式":
                 self.get_logger().info(f"[Sync] 下发同步载荷: {hex(self.feedback_hex)}")
                 try:
@@ -421,7 +594,7 @@ class VoiceNavBridge(Node):
                     self.get_logger().error(f"[Sync] 发送失败: {e}")
 
                 self.get_logger().info("[System] 开启泊车前保护期 (3.0s)...")
-                
+
                 def start_docking_sequence():
                     self.get_logger().info("[Control] 接管底盘控制权，激活闭环泊车序列。")
                     self.state = 'DOCKING'
@@ -430,6 +603,7 @@ class VoiceNavBridge(Node):
                 threading.Timer(3.0, start_docking_sequence).start()
             else:
                 self.state = 'IDLE'
+                self._update_current_room()
         elif status == 6:
             self.get_logger().warn('[Action] 任务被规划器中止。')
             self.state = 'IDLE'
@@ -439,22 +613,147 @@ class VoiceNavBridge(Node):
         else:
             self.state = 'IDLE'
 
-    # 底盘闭环控制 (驶出直行 / 泊车倒退)
+    # 底盘闭环控制 (驶出直行 / 泊车倒退 / PID巡迹过门)
     def chassis_control_loop(self):
-        if self.state not in ['DOCKING', 'EXITING']:
+        if self.state not in ['DOCKING', 'EXITING', 'DOOR_PASSING', 'DOOR_EXITING']:
             return
-            
+
         try:
             trans = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
         except Exception:
             return
-            
+
         current_x = trans.transform.translation.x
         current_y = trans.transform.translation.y
         q = trans.transform.rotation
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         current_yaw = math.atan2(siny_cosp, cosy_cosp)
+
+        # ==========================================
+        # PID 巡迹过门控制 (进门 DOOR_PASSING / 出门 DOOR_EXITING)
+        # ==========================================
+        if self.state in ['DOOR_PASSING', 'DOOR_EXITING']:
+            # 超时保护 (按线段长度动态计算, 至少30秒)
+            timeout = max(30.0, self.door_line_length / 0.08 * 1.2)
+            if self.door_start_time and (time.time() - self.door_start_time) > timeout:
+                self.get_logger().error(f"[Door] PID巡迹超时({timeout:.0f}s)，停止并切回IDLE。")
+                self.stop_robot()
+                self.state = 'IDLE'
+                self.door_start_time = None
+                self.pending_destination = None
+                return
+
+            ex, ey = self.door_entry_pose[0], self.door_entry_pose[1]
+            line_angle = self.door_line_angle
+
+            # 横向误差 (cross-track error): 机器人到线段的垂直有向距离
+            rx = current_x - ex
+            ry = current_y - ey
+            along_track = rx * math.cos(line_angle) + ry * math.sin(line_angle)
+            cross_track = -rx * math.sin(line_angle) + ry * math.cos(line_angle)
+
+            # 航向误差
+            heading_error = math.atan2(
+                math.sin(line_angle - current_yaw),
+                math.cos(line_angle - current_yaw)
+            )
+
+            # 综合误差用于微分项
+            combined_error = self.Kp_cross * cross_track + self.Kp_heading * heading_error
+            d_error = combined_error - self.door_prev_error
+            self.door_prev_error = combined_error
+
+            # PD 控制律
+            angular_z = combined_error + self.Kd_yaw * d_error
+            angular_z = max(-0.5, min(0.5, angular_z))
+
+            # 检查退出条件: 已走完90%线段 且 距出口 < 0.15m
+            dist_to_exit = math.hypot(current_x - self.door_exit_pose[0],
+                                       current_y - self.door_exit_pose[1])
+            # 退出条件: 走过终点 或 距终点<0.2m（防止overshoot后dist反弹无法退出）
+            passed_end = along_track > self.door_line_length
+            near_end = dist_to_exit < 0.2
+            if passed_end or near_end:
+                self.get_logger().info(f"[Door] PID巡迹{'出门' if self.state == 'DOOR_EXITING' else '过门'}完成！"
+                                       f"({'已过终点' if passed_end else '距终点'+str(round(dist_to_exit,2))+'m'})")
+                self.stop_robot()
+                self.door_start_time = None
+
+                if self.state == 'DOOR_EXITING':
+                    # 出门完成，处理暂存的目标
+                    self.current_room_code = None  # 已离开原房间
+                    if self.pending_destination:
+                        pending = self.pending_destination
+                        self.pending_destination = None
+                        cmd_hex = pending['cmd_hex']
+                        target = pending['target']
+
+                        # 检查目标房间是否有门需要进
+                        # 0x35 厕所倒车 与 0x31 厕所共享同一个物理位置和门
+                        door_target = target
+                        if cmd_hex == 0x35 and 'door' not in target:
+                            toilet_room = self.location_map.get(0x31)
+                            if toilet_room and 'door' in toilet_room:
+                                door_target = toilet_room
+
+                        has_door = ('door' in door_target)
+                        if has_door:
+                            self.door_entry_pose = door_target['door']['entry']
+                            self.door_exit_pose = door_target['door']['exit']
+                            self.door_room_pose = target['pose']
+                            self.state = 'NAVIGATING_TO_DOOR'
+                            self.get_logger().info(
+                                f"[Trigger] 目标: {target['name']} (含过门)。"
+                                f"门前点: {self.door_entry_pose}"
+                            )
+                        else:
+                            self.state = 'NAVIGATING'
+
+                        self.is_waiting = True
+                        self.get_logger().info(
+                            f"[Trigger] 目标分配: {target['name']}。保护期起算(3.0s)..."
+                        )
+
+                        def execute_delayed_nav():
+                            self.get_logger().info("[System] 发起 Nav2 目标规划请求。")
+                            if self.state == 'NAVIGATING_TO_DOOR':
+                                self.send_goal(self.door_entry_pose)
+                            else:
+                                self.send_goal(target['pose'])
+                            self.is_waiting = False
+                            self.ser.reset_input_buffer()
+
+                        timer = threading.Timer(3.0, execute_delayed_nav)
+                        timer.start()
+                    else:
+                        self.get_logger().error("[Door] 出门后无待处理目标，切回IDLE。")
+                        self.state = 'IDLE'
+                else:
+                    # DOOR_PASSING: 进门完成，切换至房间内导航
+                    self.state = 'NAVIGATING_TO_ROOM'
+                    if self.door_room_pose:
+                        self.get_logger().info(
+                            f"[System] 发起房间目标 Nav2 导航: {self.door_room_pose}"
+                        )
+                        self.send_goal(self.door_room_pose)
+                    else:
+                        self.get_logger().error("[Door] 房间目标位姿缺失，切回IDLE。")
+                        self.state = 'IDLE'
+                return
+
+            # 前进速度 (临近出口减速)
+            if dist_to_exit < 0.3:
+                linear_x = 0.12 * (dist_to_exit / 0.3)
+                linear_x = max(0.04, linear_x)
+            else:
+                linear_x = 0.12
+
+            cmd = Twist()
+            cmd.linear.x = linear_x
+            cmd.angular.z = angular_z
+            self.cmd_pub.publish(cmd)
+            return
 
         # 驶出解锁控制
         if self.state == 'EXITING':
@@ -472,8 +771,10 @@ class VoiceNavBridge(Node):
                 self.stop_robot()
                 self.state = 'IDLE'
                 self.exit_start_pose = None
-                self.get_logger().info("[Control] 直行完毕，导航机彻底解锁！")
-            return 
+                # 驶出后默认视为在厕所区域
+                self.current_room_code = 0x31
+                self.get_logger().info("[Control] 直行完毕，导航机彻底解锁！当前位置: 厕所区域")
+            return
 
         # 泊车控制
         target_x = self.toilet_dock_target[0]
@@ -522,6 +823,57 @@ class VoiceNavBridge(Node):
 
     def stop_robot(self):
         self.cmd_pub.publish(Twist())
+
+    def _update_current_room(self):
+        """根据 last navigation target name 更新当前所在房间"""
+        for code, info in self.location_map.items():
+            if info['name'] == self.current_target_name:
+                self.current_room_code = code
+                self.get_logger().info(f"[State] 当前位置已记录: {info['name']} (0x{code:02X})")
+                return
+        self.current_room_code = None
+
+    @staticmethod
+    def _point_in_polygon(px, py, polygon):
+        """射线法判断点 (px, py) 是否在多边形内。
+        polygon: [[x1,y1], [x2,y2], ...] 顶点列表（自动闭合）"""
+        n = len(polygon)
+        if n < 3:
+            return False
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon[i][0], polygon[i][1]
+            xj, yj = polygon[j][0], polygon[j][1]
+            if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    def _detect_current_room(self):
+        """根据机器人当前坐标 + 多边形区域判断在哪个房间"""
+        pose = self.get_current_pose()
+        if pose is None:
+            self.get_logger().warn("[Detect] 无法获取当前位姿，跳过房间检测。")
+            return None
+
+        rx, ry = pose[0], pose[1]
+
+        for code, info in self.location_map.items():
+            if code == 0x35:
+                continue
+            if 'polygon' not in info:
+                continue
+            if self._point_in_polygon(rx, ry, info['polygon']):
+                self.get_logger().info(
+                    f"[Detect] 📐 多边形检测: 机器人在 '{info['name']}' "
+                    f"(0x{code:02X}) 区域内"
+                )
+                return code
+
+        # 没有落在任何已标定的多边形内 → 视为公共区域
+        self.get_logger().info("[Detect] 机器人不在任何已标定房间多边形内，视为公共区域。")
+        return None
 
 def main(args=None):
     rclpy.init(args=args)
