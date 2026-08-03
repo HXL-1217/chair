@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>智能轮椅控制台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- SocketIO -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- ==================== 顶部状态栏 ==================== -->
+    <div id="status-bar">
+        <div class="status-item" id="status-nav2" title="导航状态">
+            <span class="status-dot off"></span>
+            <span>导航</span>
+        </div>
+        <div class="status-item" id="status-cmdvel" title="手柄控制">
+            <span class="status-dot off"></span>
+            <span>手柄</span>
+        </div>
+        <div class="status-item" id="status-mode">
+            <span>模式: <strong id="mode-text">禁止横移</strong></span>
+        </div>
+        <div class="status-item" id="status-speed">
+            <span>速度: <strong id="speed-text">中速</strong></span>
+        </div>
+    </div>
+
+    <!-- ==================== 地图画布区域 ==================== -->
+    <div id="map-container">
+        <canvas id="map-canvas"></canvas>
+        <!-- 模式提示浮层 -->
+        <div id="mode-overlay" class="hidden">
+            <span id="mode-overlay-text"></span>
+        </div>
+        <!-- 坐标提示 -->
+        <div id="coord-tooltip" class="hidden"></div>
+    </div>
+
+    <!-- ==================== 底部控制面板 ==================== -->
+    <div id="control-panel">
+        <!-- 第一行：主要功能 -->
+        <div class="btn-row">
+            <button class="btn btn-primary" id="btn-nav-start" onclick="toggleNav2()">
+                <span class="btn-icon">🚀</span>
+                <span class="btn-label">启动导航</span>
+            </button>
+            <button class="btn btn-danger" id="btn-nav-stop" onclick="toggleNav2()" style="display:none;">
+                <span class="btn-icon">⏹️</span>
+                <span class="btn-label">关闭导航</span>
+            </button>
+            <button class="btn btn-action" id="btn-set-pose" onclick="enableSetPose()">
+                <span class="btn-icon">📍</span>
+                <span class="btn-label">设初始位姿</span>
+            </button>
+            <button class="btn btn-action" id="btn-set-goal" onclick="enableSetGoal()">
+                <span class="btn-icon">🎯</span>
+                <span class="btn-label">设目标点</span>
+            </button>
+        </div>
+
+        <!-- 第二行：模式切换 -->
+        <div class="btn-row">
+            <button class="btn btn-mode" id="btn-mode-0" onclick="setMode(0)">
+                <span class="btn-label">🚫横移</span>
+            </button>
+            <button class="btn btn-mode" id="btn-mode-1" onclick="setMode(1)">
+                <span class="btn-label">🚫旋转</span>
+            </button>
+            <button class="btn btn-mode" id="btn-mode-2" onclick="setMode(2)">
+                <span class="btn-label">🔄仅旋转</span>
+            </button>
+        </div>
+
+        <!-- 第三行：速度切换 -->
+        <div class="btn-row">
+            <button class="btn btn-speed" id="btn-speed-0" onclick="setSpeed(0)">
+                <span class="btn-label">🐢低速</span>
+            </button>
+            <button class="btn btn-speed active" id="btn-speed-1" onclick="setSpeed(1)">
+                <span class="btn-label">🐇中速</span>
+            </button>
+            <button class="btn btn-speed" id="btn-speed-2" onclick="setSpeed(2)">
+                <span class="btn-label">🚄高速</span>
+            </button>
+        </div>
+
+        <!-- 第四行：记录房间 + 手动控制 -->
+        <div class="btn-row">
+            <button class="btn btn-record" id="btn-record" onclick="toggleRoomMenu()">
+                <span class="btn-icon">📝</span>
+                <span class="btn-label">记录房间</span>
+            </button>
+            <button class="btn btn-control" id="btn-cmdvel" onclick="toggleCmdVel()">
+                <span class="btn-icon">🎮</span>
+                <span class="btn-label">启用手柄</span>
+            </button>
+        </div>
+
+        <!-- 第五行：座椅控制 -->
+        <div class="btn-row">
+            <button class="btn btn-seat" onclick="controlSeat(1, 100)">
+                <span class="btn-icon">⬆️</span>
+                <span class="btn-label">座椅升</span>
+            </button>
+            <button class="btn btn-seat" onclick="controlSeat(1, -100)">
+                <span class="btn-icon">⬇️</span>
+                <span class="btn-label">座椅降</span>
+            </button>
+            <button class="btn btn-seat" onclick="controlSeat(1, 0)">
+                <span class="btn-icon">⏹️</span>
+                <span class="btn-label">停止</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ==================== 房间选择弹窗 ==================== -->
+    <div id="room-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>选择要记录的房间</h3>
+            <div class="room-list">
+                <button class="btn btn-room" onclick="recordRoom('living_room')">🏠 客厅</button>
+                <button class="btn btn-room" onclick="recordRoom('kitchen')">🍳 厨房</button>
+                <button class="btn btn-room" onclick="recordRoom('master_bedroom')">🛏️ 主卧</button>
+                <button class="btn btn-room" onclick="recordRoom('guest_bedroom')">🛏️ 客卧</button>
+                <button class="btn btn-room" onclick="recordRoom('toilet')">🚽 厕所</button>
+                <button class="btn btn-room" onclick="recordRoom('toilet_dock')">🪠 马桶</button>
+            </div>
+            <button class="btn btn-cancel" onclick="toggleRoomMenu()">取消</button>
+        </div>
+    </div>
+
+    <!-- ==================== Toast 提示 ==================== -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- ==================== JS 脚本 ==================== -->
+    <script src="/static/js/map_renderer.js"></script>
+    <script src="/static/js/ui_controller.js"></script>
+</body>
+</html>
