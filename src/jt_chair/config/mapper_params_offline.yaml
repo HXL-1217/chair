@@ -1,0 +1,78 @@
+# ============================================
+# slam_toolbox 离线建图配置
+# 用法: 与 start_offline_mapping.sh 配合，
+#       rosbag 回放 + EKF + dual_laser_merger 生成 TF 与 /scan_merged 后离线重建地图
+# 说明: 基于 jt_chair 的 mapper_params_online_sync.yaml（针对轮椅环境调优），
+#       仅调整离线相关参数。
+# ============================================
+slam_toolbox:
+  ros__parameters:
+
+    # ---------- 插件参数 (核心性能释放) ----------
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ---------- ROS 参数 ----------
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_link
+    scan_topic: /scan_merged
+    use_map_saver: true
+    mode: mapping
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.05
+    map_update_interval: 1.0
+    resolution: 0.05
+    restamp_tf: true
+    min_laser_range: 0.15
+    max_laser_range: 15.0
+    minimum_time_interval: 0.05
+    transform_timeout: 0.1
+    tf_buffer_duration: 14400.   # [离线] 长 TF 缓冲，避免回放初期查询超时
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # ---------- 通用参数 ----------
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.15
+    minimum_travel_heading: 0.05
+    scan_buffer_size: 20
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+
+    # ---------- 回环检测 (Loop Closure) ----------
+    do_loop_closing: true
+    loop_search_maximum_distance: 5.0
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ---------- 搜索空间参数 ----------
+    correlation_search_space_dimension: 0.3
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.03
+    loop_search_space_dimension: 10.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # ---------- 扫描匹配惩罚项 ----------
+    distance_variance_penalty: 2.0
+    angle_variance_penalty: 1.5
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.8
+    use_response_expansion: true
+    min_pass_through: 2
+    occupancy_threshold: 0.1

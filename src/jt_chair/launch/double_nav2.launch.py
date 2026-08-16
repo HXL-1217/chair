@@ -255,7 +255,8 @@ def generate_launch_description():
         default=os.path.join(jt_chair_share, 'config', 'double_localization.yaml')
     )
 
-    map_file = "/home/orangepi/slam_ws/src/jt_chair/map/ysg1"       
+    map_file = "/home/orangepi/slam_ws/src/jt_chair/map/test_map0814"       
+    
 
     # nav2 params
     nav2_params_file = LaunchConfiguration(

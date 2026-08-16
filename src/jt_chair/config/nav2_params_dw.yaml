@@ -97,7 +97,7 @@ controller_server:
       motion_model: "DiffDrive" 
       
       vx_max: 0.5
-      vx_min: -0.1              # 严禁倒车
+      vx_min: 0.0              # 倒车:-0.1 
       wz_max: 1.2
       vx_std: 0.2              
       vy_std: 0.0              # 差速模型必须为0
