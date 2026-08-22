@@ -1,0 +1,11 @@
+# rosbag 录制 QoS 覆盖配置
+# 用途：ros2 bag record 默认用 reliable+volatile 订阅，而 static_transform_publisher
+#       发布 /tf_static 用 transient_local（锁存），两者 QoS 不匹配时 /tf_static 会录到 0 条。
+# 用法（仅当 bag info 里 /tf_static 为 0 条时才需要）：
+#   ros2 bag record --qos-profile-overrides-path ~/slam_ws/rosbag_qos_overrides.yaml \
+#       -o <bag名> /scan_1 /scan_2 /imu /odom /cmd_vel /tf_static /tf
+/tf_static:
+  history: keep_last
+  depth: 10
+  reliability: reliable
+  durability: transient_local

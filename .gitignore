@@ -19,3 +19,5 @@ src/jt_chair/map/
 # 忽略 ROS/ROS2 录制的大型传感器数据包
 *.bag
 *.mcap
+# rosbag 原始数据目录（db3/metadata 大文件不进 git；zip 存档与实验日志直接放在 rosbags/ 下）
+rosbags/*/
