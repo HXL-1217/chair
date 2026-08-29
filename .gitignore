@@ -2,6 +2,7 @@
 build/
 install/
 log/
+rosbags/
 
 # Python 编译缓存（如果是 Python 节点）
 __pycache__/

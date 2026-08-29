@@ -23,7 +23,7 @@ slam_toolbox:
     map_update_interval: 1.0        # 定位模式下此参数影响不大，保持 1.0 即可
     resolution: 0.05
     restamp_tf: true                
-    min_laser_range: 0.15
+    min_laser_range: 0.2
     max_laser_range: 15.0
 
     minimum_time_interval: 0.05     # [优化] 匹配双雷达的 20Hz 高频输入

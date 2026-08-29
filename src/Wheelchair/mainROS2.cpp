@@ -1,4 +1,5 @@
-//融合imu的里程计节点，删除了TF发布功能，改为直接发布里程计消息给robot_localization的EKF节点进行融合
+//融合imu的里程计节点。TF 发布(odom->base_link)改为 publish_tf 参数控制：
+//默认关闭（在线栈由 EKF 发 TF），raw_record 录包/纯odom实验等无 EKF 场景由 launch 显式打开。
 #include "ZLAC8015MotorBus.h"
 #include <iostream>
 #include "UdpComm.h"
@@ -13,8 +14,8 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2/LinearMath/Quaternion.h>
-// [删除] 不再需要 TF 广播器头文件
-// #include <tf2_ros/transform_broadcaster.h>
+// [恢复] TF 广播器（publish_tf 参数为 true 时才发布 odom->base_link）
+#include <tf2_ros/transform_broadcaster.h>
 
 using namespace std::chrono_literals;
 using json = nlohmann::json;
@@ -51,10 +52,18 @@ public:
     timer_ = this->create_wall_timer(50ms,
                                      std::bind(&DSWChair::publishOdometry, this));
 
-    // [削权] 删除 TF 广播器的初始化代码，把发 TF 的任务交给 robot_localization
-    // tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    // [恢复] 可选 TF 广播：publish_tf=true 时发布 odom->base_link。
+    // 注意：与 EKF（ekf_filter_node 也发 odom->base_link）同时打开会互相打架，
+    // 因此默认 false，仅在 raw_record 等无 EKF 场景由 launch 显式开启。
+    publish_tf_ = this->declare_parameter<bool>("publish_tf", false);
+    if (publish_tf_)
+    {
+      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
 
-    RCLCPP_INFO(this->get_logger(), "DSWChair node started. TF broadcasting disabled (delegated to EKF).");
+    RCLCPP_INFO(this->get_logger(),
+                publish_tf_ ? "DSWChair node started. TF publishing: odom->base_link (ON)"
+                            : "DSWChair node started. TF broadcasting disabled (delegated to EKF).");
   }
 
 private:
@@ -111,11 +120,11 @@ private:
 
     // 正运动学
     auto bv = chair.computeForwardKinematics(vl_, vr_, thl, thr);
-    
-    // 注意：computeForwardKinematics 返回的 omega 方向取决于椅子的定义
-    // 之前的代码中有 corrected_omega = -bv.omega，这里保留原有逻辑
-    double corrected_omega = -bv.omega;
-    
+
+    // [修复·左右转向反] 库的 omega 本就是逆时针为正（computeWheelCommands 与之互为逆运算，
+    // 控制方向已验证正确）。旧代码此处多取了一次负号（旧版在 cmd_vel 输入端取反的配对遗留，
+    // 输入端取反删除后此补偿就成了 bug）：导致 theta_ 积分方向与实际转向相反——
+    // 前进正常、转弯时 odom 位姿左右镜像。现直接用 bv.omega，与 twist.angular.z 同号。
     double sin_th = sin(theta_);
     double cos_th = cos(theta_);
 
@@ -123,8 +132,8 @@ private:
     // 假设 bv.vx 是车身坐标系下的前向速度，bv.vy 是侧向速度
     x_ += (bv.vx * cos_th - bv.vy * sin_th) * dt;
     y_ += (bv.vx * sin_th + bv.vy * cos_th) * dt;
-    theta_ += (corrected_omega * dt);
-    
+    theta_ += (bv.omega * dt);
+
     // 角度归一化到 -PI ~ PI
     if (theta_ > M_PI) { theta_ -= 2.0 * M_PI; }
     else if (theta_ < -M_PI) { theta_ += 2.0 * M_PI; }
@@ -177,7 +186,22 @@ private:
     // 发布里程计信息给 EKF
     odom_pub_->publish(odom);
 
-    // [削权] 彻底删除了 TF 发布相关的代码 (geometry_msgs::msg::TransformStamped ... tf_broadcaster_->sendTransform)
+    // [恢复] 参数开启时广播 odom->base_link TF（位姿与 /odom 消息一致）
+    if (publish_tf_ && tf_broadcaster_)
+    {
+      geometry_msgs::msg::TransformStamped transform;
+      transform.header.stamp = current_time;
+      transform.header.frame_id = "odom";
+      transform.child_frame_id = "base_link";
+      transform.transform.translation.x = x_;
+      transform.transform.translation.y = y_;
+      transform.transform.translation.z = 0.0;
+      transform.transform.rotation.x = q.x();
+      transform.transform.rotation.y = q.y();
+      transform.transform.rotation.z = q.z();
+      transform.transform.rotation.w = q.w();
+      tf_broadcaster_->sendTransform(transform);
+    }
 
     last_odom_time_ = odom_time;
   }
@@ -190,7 +214,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
-  // [删除] std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  // [恢复] publish_tf 参数控制的 TF 广播器
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  bool publish_tf_ = false;
 
   geometry_msgs::msg::Twist ctrl_vel_;
   double x_, y_, theta_;

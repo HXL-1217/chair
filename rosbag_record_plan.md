@@ -54,7 +54,8 @@ ros2 bag record -o wheelchair_raw_test_01 /scan_1 /scan_2 /imu /odom /cmd_vel /t
 ```
 
 - `/tf`、`/tf_static` **按名字直接录即可，不是隐藏话题**，不需要 `--include-hidden-topics`
-- `/tf` 在本模式下预期 **0 条**（EKF/SLAM 都没启动，没人广播动态 TF）；录它纯作漏网检测——录出来 >0 说明有节点没关干净，该包作废
+- `/tf` 内容为 dsw_chair 广播的 **odom→base_link**（launch 参数 `publish_tf` **默认关闭**；想要 odom TF 进 bag 就 `publish_tf:=true`）。
+  开启后母包可直接做"纯 odom"离线回放；但做 **EKF 离线回放时必须用 `--topics` 排除 /tf**（见第六节），否则与 EKF 广播的 TF 打架
 - 磁盘紧张时加 `-b 2048`（每 2GB 自动切分文件）
 - 停止录制：Ctrl+C
 
@@ -68,7 +69,7 @@ ros2 bag record -o wheelchair_raw_test_01 /scan_1 /scan_2 /imu /odom /cmd_vel /t
 | `/odom` | nav_msgs/Odometry | 轮式里程计（dsw_chair） | ~1200 条/分钟 @20Hz |
 | `/cmd_vel` | geometry_msgs/Twist | 遥控指令（对照/回放用） | 手柄在动就有持续输出 |
 | `/tf_static` | tf2_msgs/TFMessage | 3 条静态外参 | **≥1 条即合格**（锁存话题只有 1~2 条，不是"大量"） |
-| `/tf` | tf2_msgs/TFMessage | 漏网检测 | 0 条为正常 |
+| `/tf` | tf2_msgs/TFMessage | odom→base_link（dsw_chair，publish_tf） | 默认 0 条；`publish_tf:=true` 时 ~1200 条/分钟 @20Hz |
 
 - ⚠️ 若 `/tf_static` 为 0 条（transient_local QoS 与录制订阅不匹配）：改用
   `ros2 bag record --qos-profile-overrides-path ~/slam_ws/rosbag_qos_overrides.yaml -o <名字> ...` 重录
@@ -100,8 +101,9 @@ bag 里只有原始数据、动态 TF 需回放时重算。回放要点：
 手动分步执行：
 
 ```bash
-# 终端1: 回放 bag
-ros2 bag play --clock ~/slam_ws/rosbags/wheelchair_raw_loop_01
+# 终端1: 回放 bag（EKF 流程必须用 --topics 排除 /tf —— bag 里录的是轮式 odom 的 TF，
+#        会和 EKF 广播的 odom→base_link 打架）
+ros2 bag play ~/slam_ws/rosbags/wheelchair_raw_loop_01 --clock --topics /scan_1 /scan_2 /imu /odom /cmd_vel
 
 # 终端2: 静态 TF
 ros2 run tf2_ros static_transform_publisher 0.29 -0.255 0.2 0 0 0 base_link laser_1 &
@@ -131,6 +133,16 @@ ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: '~/sla
 ```
 
 只做 EKF 融合对照（不建图）：跑 终端1/2/3，对比 `/odometry/filtered` 与 `/odom` 即可。
+
+**纯 odom 对照（不跑 EKF）**：前提是录制时开了 `publish_tf:=true`（bag 的 /tf 含轮式 odom→base_link），整包播放即可，无需 EKF：
+
+```bash
+# 终端1: 整包播放（含 /tf，不加 --topics）
+ros2 bag play ~/slam_ws/rosbags/wheelchair_raw_loop_01 --clock
+# 终端2/3/4: 静态 TF、双雷达融合、离线建图，与上面 EKF 流程的命令完全相同
+```
+
+对比实验做法：同一段 bag 分别走「EKF 流程」和「纯 odom 流程」各建一次图，对比轨迹与地图质量。
 
 ## 七、注意事项
 

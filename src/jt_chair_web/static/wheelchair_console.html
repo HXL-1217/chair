@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>轮椅控制台</title>
+    <!-- Socket.IO（连接香橙派 web 后端，用于接收真实地图/位姿/路径） -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        :root {
+            --ease: cubic-bezier(0.4, 0, 0.2, 1);
+            --bg-0: #f7f8fa;
+            --bg-1: #edeff3;
+            --glass: rgba(255,255,255,0.58);
+            --glass-strong: rgba(255,255,255,0.75);
+            --stroke: rgba(15,23,42,0.08);
+            --stroke-soft: rgba(15,23,42,0.12);
+            --highlight: rgba(255,255,255,0.7);
+            --text-strong: #1f2430;
+            --text: #3a4250;
+            --text-soft: #8a93a2;
+            --blue: #2563eb;
+            --blue-2: #3b82f6;
+            --green: #16a34a;
+            --red: #ef4444;
+            --amber: #d97706;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            background:
+                radial-gradient(1100px 700px at 12% -10%, rgba(147,197,253,0.20), transparent 60%),
+                radial-gradient(900px 620px at 102% -6%, rgba(196,181,253,0.16), transparent 56%),
+                radial-gradient(820px 720px at 52% 118%, rgba(203,213,225,0.45), transparent 62%),
+                linear-gradient(180deg, var(--bg-0), var(--bg-1));
+        }
+
+        /* ===== 顶栏 ===== */
+        .header {
+            background: var(--glass);
+            backdrop-filter: blur(22px) saturate(180%);
+            -webkit-backdrop-filter: blur(22px) saturate(180%);
+            border-bottom: 1px solid var(--stroke);
+            box-shadow: inset 0 -1px 0 var(--highlight);
+            padding: 10px 20px; display: flex; justify-content: space-between;
+            align-items: center; flex-shrink: 0;
+        }
+        .header h1 { font-size: 17px; font-weight: 700; color: var(--text-strong); letter-spacing: -0.01em; }
+        .conn-badge {
+            font-size: 11px; padding: 3px 12px; border-radius: 30px; font-weight: 600;
+            transition: background 0.3s var(--ease), color 0.3s var(--ease);
+            box-shadow: inset 0 1px 0 var(--highlight);
+        }
+        .conn-badge.on  { background: rgba(220,252,231,0.9); color: #166534; animation: badgePulse 2.4s ease-in-out infinite; }
+        .conn-badge.off { background: rgba(254,243,199,0.9); color: #92400e; }
+
+        /* ===== 主体 ===== */
+        .main { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+        /* ===== 左侧面板 ===== */
+        .panel {
+            width: 300px; background: var(--glass);
+            backdrop-filter: blur(22px) saturate(180%);
+            -webkit-backdrop-filter: blur(22px) saturate(180%);
+            border-right: 1px solid var(--stroke);
+            box-shadow: inset -1px 0 0 var(--highlight);
+            padding: 16px; overflow-y: auto; display: flex; flex-direction: column;
+            gap: 12px; flex-shrink: 0;
+        }
+        .info-card {
+            background: linear-gradient(180deg, rgba(224,242,254,0.75), rgba(240,249,255,0.55));
+            border: 1px solid rgba(186,230,253,0.6); border-radius: 14px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 2px 10px rgba(14,165,233,0.07);
+            padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px;
+        }
+        .info-card .val { font-weight: 600; color: #0369a1; }
+
+        .card {
+            border: 1px solid var(--stroke); border-radius: 14px; padding: 14px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.48));
+            backdrop-filter: blur(16px) saturate(160%);
+            -webkit-backdrop-filter: blur(16px) saturate(160%);
+            box-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px rgba(15,23,42,0.03), 0 6px 20px rgba(15,23,42,0.05);
+            transition: border-color 0.25s var(--ease), background 0.25s var(--ease), box-shadow 0.25s var(--ease);
+        }
+        .card.active {
+            border-color: rgba(59,130,246,0.5);
+            background: linear-gradient(180deg, rgba(239,246,255,0.85), rgba(224,238,255,0.6));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.85), 0 0 0 3px rgba(59,130,246,0.08), 0 6px 18px rgba(59,130,246,0.12);
+        }
+        .card .card-title { font-weight: 700; font-size: 14px; margin-bottom: 10px; color: var(--text-strong); }
+        .card .row {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 8px; flex-wrap: wrap;
+        }
+        .card .row + .row { margin-top: 8px; }
+        .card .sub { font-size: 11px; color: var(--text-soft); margin-top: 6px; }
+
+        /* 开关 */
+        .toggle {
+            display: inline-flex; gap: 2px; background: rgba(15,23,42,0.07);
+            border-radius: 30px; padding: 3px;
+            box-shadow: inset 0 1px 3px rgba(15,23,42,0.08), inset 0 -1px 0 rgba(255,255,255,0.55);
+        }
+        .toggle button {
+            border: none; padding: 5px 16px; border-radius: 30px; font-size: 13px;
+            font-weight: 500; cursor: pointer; background: transparent; color: var(--text-soft);
+            transition: background 0.2s var(--ease), color 0.2s var(--ease), box-shadow 0.2s var(--ease), transform 0.12s var(--ease);
+        }
+        .toggle button:hover:not(.active) { color: var(--text); }
+        .toggle button:active { transform: scale(0.96); }
+        .toggle button.active {
+            background: linear-gradient(180deg, #ffffff, #f1f3f7); color: var(--text-strong);
+            box-shadow: inset 0 1px 0 #fff, 0 1px 3px rgba(15,23,42,0.14);
+        }
+        .toggle button.on.active  { background: linear-gradient(180deg, #e9fcee, #d3f6df); color: #15803d; }
+        .toggle button.off.active { background: linear-gradient(180deg, #fee9e9, #fcdbdb); color: #dc2626; }
+
+        /* 按钮 */
+        .btn {
+            border: none; padding: 6px 16px; border-radius: 30px; font-size: 13px;
+            font-weight: 600; cursor: pointer; white-space: nowrap;
+            transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease),
+                        box-shadow 0.18s var(--ease), transform 0.12s var(--ease), filter 0.18s var(--ease);
+        }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+        .btn:hover:not(:disabled)  { transform: translateY(-1px); }
+        .btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
+        .btn-blue {
+            background: linear-gradient(180deg, #4a8cf7, #2563eb); color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.10);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 1px rgba(0,0,0,0.12), 0 4px 12px rgba(37,99,235,0.30);
+        }
+        .btn-blue:hover:not(:disabled) {
+            background: linear-gradient(180deg, #5a98f8, #1d4ed8);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 1px 1px rgba(0,0,0,0.12), 0 7px 18px rgba(37,99,235,0.40);
+        }
+        .btn-blue:active:not(:disabled) {
+            background: linear-gradient(180deg, #2563eb, #1e56d6);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.22), 0 1px 2px rgba(37,99,235,0.25);
+        }
+        .btn-green {
+            background: linear-gradient(180deg, #34b35b, #16a34a); color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.10);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 1px rgba(0,0,0,0.12), 0 4px 12px rgba(22,163,74,0.30);
+        }
+        .btn-green:hover:not(:disabled) {
+            background: linear-gradient(180deg, #3ec06a, #15803d);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 1px 1px rgba(0,0,0,0.12), 0 7px 18px rgba(22,163,74,0.40);
+        }
+        .btn-green:active:not(:disabled) {
+            background: linear-gradient(180deg, #16a34a, #128a3e);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.22), 0 1px 2px rgba(22,163,74,0.25);
+        }
+        .btn-red {
+            background: linear-gradient(180deg, #f35f5f, #ef4444); color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.10);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 1px rgba(0,0,0,0.12), 0 4px 12px rgba(239,68,68,0.30);
+        }
+        .btn-red:hover:not(:disabled) {
+            background: linear-gradient(180deg, #f87272, #dc2626);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 1px 1px rgba(0,0,0,0.12), 0 7px 18px rgba(239,68,68,0.40);
+        }
+        .btn-red:active:not(:disabled) {
+            background: linear-gradient(180deg, #ef4444, #d92727);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.22), 0 1px 2px rgba(239,68,68,0.25);
+        }
+        .btn-amber {
+            background: linear-gradient(180deg, #e8922b, #d97706); color: #fff;
+            text-shadow: 0 1px 1px rgba(0,0,0,0.10);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 1px rgba(0,0,0,0.12), 0 4px 12px rgba(217,119,6,0.30);
+        }
+        .btn-amber:hover:not(:disabled) {
+            background: linear-gradient(180deg, #f09e40, #b45309);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 1px 1px rgba(0,0,0,0.12), 0 7px 18px rgba(217,119,6,0.40);
+        }
+        .btn-amber:active:not(:disabled) {
+            background: linear-gradient(180deg, #d97706, #c2660a);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.22), 0 1px 2px rgba(217,119,6,0.25);
+        }
+        .btn-outline {
+            background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(255,255,255,0.55));
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid var(--stroke-soft); color: var(--text);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 2px rgba(15,23,42,0.06);
+        }
+        .btn-outline:hover:not(:disabled) {
+            background: linear-gradient(180deg, #ffffff, rgba(255,255,255,0.72));
+            border-color: rgba(15,23,42,0.18);
+            box-shadow: inset 0 1px 0 #fff, 0 3px 10px rgba(15,23,42,0.10);
+        }
+        .btn-outline:active:not(:disabled) {
+            background: rgba(243,244,246,0.9);
+            box-shadow: inset 0 1px 3px rgba(15,23,42,0.10);
+        }
+        .btn-outline.on {
+            background: linear-gradient(180deg, rgba(220,252,231,0.92), rgba(187,247,208,0.7));
+            border-color: rgba(134,239,172,0.8); color: #15803d;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 1px 3px rgba(22,163,74,0.16);
+        }
+        .btn-outline.on:hover:not(:disabled) {
+            background: linear-gradient(180deg, rgba(220,252,231,0.98), rgba(187,247,208,0.8));
+            border-color: rgba(134,239,172,0.9);
+        }
+
+        /* 分段选择（模式/速度） */
+        .seg { display: flex; gap: 4px; width: 100%; }
+        .seg button {
+            flex: 1; border: 1px solid var(--stroke-soft); background: rgba(255,255,255,0.5); border-radius: 8px;
+            padding: 6px 2px; font-size: 12px; cursor: pointer; color: var(--text);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+            transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease), box-shadow 0.18s var(--ease), transform 0.12s var(--ease);
+        }
+        .seg button:hover:not(.active) { background: rgba(255,255,255,0.82); }
+        .seg button:active { transform: scale(0.96); }
+        .seg button.active {
+            background: linear-gradient(180deg, #4a8cf7, #2563eb); color: #fff; border-color: rgba(37,99,235,0.5);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 8px rgba(37,99,235,0.30);
+        }
+
+        /* 房间按钮网格 */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .grid .btn { padding: 6px 4px; font-size: 12px; }
+
+        /* LED */
+        .dot {
+            display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+            background: #cbd2dc; vertical-align: middle; margin-right: 4px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.18);
+            transition: background 0.25s var(--ease), box-shadow 0.25s var(--ease);
+        }
+        .dot.on  { background: #22c55e; animation: dotPulse 2s ease-in-out infinite; }
+
+        /* ===== 地图 ===== */
+        .map-wrap {
+            flex: 1; min-height: 0; position: relative; background: #eceff3; overflow: hidden;
+        }
+        .map-wrap canvas { display: block; position: absolute; top: 0; left: 0; }
+        .map-wrap.grab     { cursor: grab; }
+        .map-wrap.grabbing { cursor: grabbing; }
+        .map-wrap.pose     { cursor: crosshair; }
+        .map-wrap.nav      { cursor: cell; }
+
+        .map-hint {
+            position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+            background: rgba(31,41,55,0.72); color: #f9fafb; padding: 6px 20px;
+            border-radius: 30px; font-size: 13px; white-space: nowrap;
+            pointer-events: none; z-index: 10;
+            border: 1px solid rgba(255,255,255,0.14);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 4px 16px rgba(15,23,42,0.18);
+            transition: background 0.3s var(--ease), box-shadow 0.3s var(--ease);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .map-hint.pose-on { background: rgba(37,99,235,0.78); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 16px rgba(37,99,235,0.35); }
+        .map-hint.nav-on  { background: rgba(220,38,38,0.78); box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 4px 16px rgba(220,38,38,0.35); }
+
+        .zoom-badge {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(255,255,255,0.72); color: var(--text-soft); padding: 3px 10px;
+            border-radius: 6px; font-size: 11px; pointer-events: none; z-index: 10;
+            border: 1px solid var(--stroke);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 3px rgba(15,23,42,0.06);
+        }
+        .fit-btn {
+            position: absolute; top: 10px; right: 10px; z-index: 11;
+            border: 1px solid var(--stroke-soft); background: rgba(255,255,255,0.75); border-radius: 8px;
+            font-size: 12px; color: var(--text); padding: 4px 10px; cursor: pointer;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.85), 0 1px 2px rgba(15,23,42,0.06);
+            transition: background 0.18s var(--ease), border-color 0.18s var(--ease), transform 0.12s var(--ease), box-shadow 0.18s var(--ease);
+        }
+        .fit-btn:hover {
+            background: rgba(255,255,255,0.9); border-color: rgba(15,23,42,0.18);
+            box-shadow: inset 0 1px 0 #fff, 0 3px 10px rgba(15,23,42,0.10);
+        }
+        .fit-btn:active { transform: scale(0.95); }
+
+        /* ===== 底部日志 ===== */
+        .log-bar {
+            background: var(--glass);
+            backdrop-filter: blur(22px) saturate(180%);
+            -webkit-backdrop-filter: blur(22px) saturate(180%);
+            border-top: 1px solid var(--stroke);
+            box-shadow: inset 0 1px 0 var(--highlight);
+            padding: 6px 16px;
+            display: flex; justify-content: space-between; align-items: center;
+            flex-shrink: 0; font-size: 12px; color: var(--text-soft); height: 34px;
+        }
+        .log-bar button {
+            background: none; border: none; color: var(--text-soft); cursor: pointer; font-size: 12px;
+        }
+        .log-bar button:hover { color: var(--text); }
+
+        /* ===== 动效关键帧 ===== */
+        @keyframes dotPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.45); }
+            50%      { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+        }
+        @keyframes badgePulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,0); }
+            50%      { box-shadow: 0 0 0 3px rgba(22,163,74,0.14); }
+        }
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .panel .card, .panel .info-card { animation: cardIn 0.4s var(--ease) both; }
+        .panel .card:nth-child(2) { animation-delay: 0.03s; }
+        .panel .card:nth-child(3) { animation-delay: 0.06s; }
+        .panel .card:nth-child(4) { animation-delay: 0.09s; }
+        .panel .card:nth-child(5) { animation-delay: 0.12s; }
+        .panel .card:nth-child(6) { animation-delay: 0.15s; }
+        .panel .card:nth-child(7) { animation-delay: 0.18s; }
+
+        @media (prefers-reduced-motion: reduce) {
+            * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+        }
+
+        @media (max-width: 640px) {
+            .panel { width: 100%; max-height: 320px; border-right: none; border-bottom: 1px solid var(--stroke); }
+            .main { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ===== 顶栏 ===== -->
+<div class="header">
+    <h1>轮椅控制台</h1>
+    <span id="connBadge" class="conn-badge off">连接中…</span>
+</div>
+
+<!-- ===== 主体 ===== -->
+<div class="main">
+
+    <!-- ========== 控制面板 ========== -->
+    <div class="panel">
+
+        <!-- 状态 -->
+        <div class="info-card">
+            <span>位置 <span class="val" id="infoPos">—</span></span>
+            <span>朝向 <span class="val" id="infoYaw">—</span></span>
+        </div>
+
+        <!-- ★ 导航程序 -->
+        <div class="card" id="nav2Card">
+            <div class="card-title">导航程序</div>
+            <div class="row">
+                <span style="font-size:13px;"><span class="dot" id="nav2Dot"></span> <span id="nav2Label">已停止</span></span>
+                <div class="toggle" id="nav2Toggle">
+                    <button class="off active" data-v="off">停止</button>
+                    <button class="on" data-v="on">启动</button>
+                </div>
+            </div>
+            <div class="sub">启动/停止完整导航栈（定位 + Nav2）</div>
+        </div>
+
+        <!-- ★ 建图（手动，后端未开放接口） -->
+        <div class="card">
+            <div class="card-title">建图（手动）</div>
+            <div class="row">
+                <button class="btn btn-outline" id="mappingHelpBtn">查看步骤</button>
+            </div>
+            <div class="sub">web 后端未开放建图接口，需在香橙派上 SSH 手动执行脚本</div>
+        </div>
+
+        <!-- ★ 手柄控制 -->
+        <div class="card" id="joyCard">
+            <div class="card-title">手柄控制</div>
+            <div class="row">
+                <span style="font-size:13px;"><span class="dot" id="joyDot"></span> <span id="joyLabel">未启用</span></span>
+                <div class="toggle" id="joyToggle">
+                    <button class="off active" data-v="off">关闭</button>
+                    <button class="on" data-v="on">启用</button>
+                </div>
+            </div>
+            <div class="sub">启用手柄（joy.py）后可用摇杆手动驾驶轮椅</div>
+        </div>
+
+        <!-- ★ 导航目标 -->
+        <div class="card" id="goalCard">
+            <div class="card-title">导航目标</div>
+            <div class="row">
+                <button class="btn btn-red" id="goalBtn">设目标点</button>
+            </div>
+            <div class="sub" id="goalSub">在地图上按住拖拽设置目标点和方向</div>
+        </div>
+
+        <!-- ★ 初始位姿 -->
+        <div class="card" id="poseCard">
+            <div class="card-title">初始位姿</div>
+            <div class="row">
+                <button class="btn btn-blue" id="poseBtn">修正位姿</button>
+            </div>
+            <div class="sub" id="poseSub">定位不准时，在地图上按住拖拽设置位姿和朝向</div>
+        </div>
+
+        <!-- ★ 记录房间 -->
+        <div class="card">
+            <div class="card-title">记录房间</div>
+            <div class="row">
+                <div class="grid" id="roomGrid">
+                    <button class="btn btn-outline" data-room="living_room">客厅</button>
+                    <button class="btn btn-outline" data-room="kitchen">厨房</button>
+                    <button class="btn btn-outline" data-room="master_bedroom">主卧</button>
+                    <button class="btn btn-outline" data-room="guest_bedroom">客卧</button>
+                    <button class="btn btn-outline" data-room="toilet">厕所</button>
+                    <button class="btn btn-outline" data-room="toilet_dock">马桶</button>
+                </div>
+            </div>
+            <div class="sub">把当前轮椅位姿写入 waypoints_config.json</div>
+        </div>
+
+    </div>
+
+    <!-- ========== 地图 ========== -->
+    <div class="map-wrap grab" id="mapWrap">
+        <canvas id="mapCanvas"></canvas>
+        <button class="fit-btn" id="fitBtn" title="复位视图">复位</button>
+        <div class="zoom-badge" id="zoomBadge" style="right: 74px;">—</div>
+        <div class="map-hint" id="mapHint">拖拽平移 · 滚轮缩放 · 等待地图…</div>
+    </div>
+</div>
+
+<!-- ===== 日志 ===== -->
+<div class="log-bar">
+    <span id="logText">系统就绪 — 正在连接后端…</span>
+    <button id="clearLogBtn">清空</button>
+</div>
+
+<script>
+// ================================================================
+// ★ 后端地址配置（对接重点）
+// ================================================================
+// 若本页面由香橙派 web 后端托管（同源 http://...），会自动使用当前地址；
+// 若直接双击用浏览器打开（file://），则使用下面配置的香橙派 IP / 端口。
+const CONFIG = {
+    host: '192.168.66.202',   // ★ 改成香橙派实际 IP
+    port: 5000,
+};
+const SERVER = (location.protocol === 'http:' || location.protocol === 'https:')
+    ? location.origin
+    : ('http://' + CONFIG.host + ':' + CONFIG.port);
+
+// ================================================================
+// 状态
+// ================================================================
+const S = {
+    connected: false,       // SocketIO 是否已连接
+    mapImage: null,         // 地图 Image 对象
+    mapInfo: null,          // {width,height,resolution,origin_x,origin_y,origin_yaw}
+    robot: null,            // 机器人位姿 {x,y,yaw}（米/弧度）
+    path: [],               // 规划路径 [{x,y},...]
+    nav2Running: false,
+    cmdvelRunning: false,
+    mode: 0,                // 0=禁止横移 1=禁止旋转 2=仅旋转
+    speed: 1,               // 0=低速 1=中速 2=高速
+    interactMode: 'view',   // 'view' | 'set_pose' | 'set_goal'
+    placing: null,          // {x,y,cx,cy} 拖拽放置中
+    // 视图
+    viewX: 0, viewY: 0, zoom: 50,   // 视图中心(世界坐标) + 像素/米
+    viewRot: 0,                      // 视图旋转角度（弧度）
+    cw: 0, ch: 0,                    // 画布 CSS 尺寸
+    lastMapHead: null,               // 用于地图去重
+    fitted: false,
+};
+
+const MINZ = 2, MAXZ = 800;
+
+// ================================================================
+// DOM 快捷
+// ================================================================
+const $ = id => document.getElementById(id);
+const $$ = (q, r) => (r || document).querySelectorAll(q);
+
+function log(msg) {
+    $('logText').textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    console.log(msg);
+}
+
+// ================================================================
+// REST 接口封装（对应 app.py 的路由）
+// ================================================================
+async function api(path, method = 'GET', body = null) {
+    try {
+        const opts = { method };
+        if (body !== null) {
+            opts.headers = { 'Content-Type': 'application/json' };
+            opts.body = JSON.stringify(body);
+        }
+        const resp = await fetch(SERVER + path, opts);
+        return await resp.json();
+    } catch (e) {
+        console.error('API 请求失败:', path, e);
+        return { success: false, message: '网络请求失败，请检查后端是否运行' };
+    }
+}
+
+// ================================================================
+// SocketIO 连接（接收地图/位姿/路径/状态）
+// ================================================================
+let socket = null;
+function connectSocket() {
+    if (typeof io === 'undefined') {
+        log('Socket.IO 未加载（无网络？），地图将不可用，仅状态轮询');
+        setConnected(false);
+        return;
+    }
+    socket = io(SERVER, { transports: ['websocket', 'polling'] });
+
+    socket.on('connect', () => { setConnected(true); log('已连接后端'); });
+    socket.on('disconnect', () => { setConnected(false); log('与后端断开，正在重连…'); });
+    socket.on('connect_error', () => setConnected(false));
+
+    socket.on('state_update', (data) => {
+        // 地图
+        if (data.map_image && data.map_info) {
+            updateMap(data.map_image, data.map_info);
+        }
+        // 位姿
+        if (data.robot_pose) S.robot = data.robot_pose;
+        // 路径
+        if (Array.isArray(data.global_path)) S.path = data.global_path;
+        // 状态
+        S.nav2Running = !!data.nav2_running;
+        S.cmdvelRunning = !!data.cmdvel_running;
+        if (data.mode !== undefined) S.mode = data.mode;
+        if (data.speed_level !== undefined) S.speed = data.speed_level;
+        refreshUI(); draw();
+    });
+}
+
+function setConnected(v) {
+    S.connected = v;
+    const b = $('connBadge');
+    if (v) { b.textContent = '已连接'; b.className = 'conn-badge on'; }
+    else   { b.textContent = '未连接'; b.className = 'conn-badge off'; }
+}
+
+// 状态轮询（SocketIO 断开时的后备，同时兜底位姿/状态）
+function startStatusPoll() {
+    setInterval(async () => {
+        try {
+            const r = await api('/api/status');
+            if (r && r.success !== false) {
+                if (r.robot_pose) S.robot = r.robot_pose;
+                S.nav2Running = !!r.nav2_running;
+                S.cmdvelRunning = !!r.cmdvel_running;
+                if (r.mode !== undefined) S.mode = r.mode;
+                if (r.speed_level !== undefined) S.speed = r.speed_level;
+                refreshUI(); draw();
+            }
+        } catch (e) { /* 忽略 */ }
+    }, 3000);
+}
+
+// ================================================================
+// 坐标变换（世界 y 轴向上 → 屏幕 y 轴向下）
+// ================================================================
+function worldToScreen(x, y) {
+    const dx = (x - S.viewX) * S.zoom;
+    const dy = (y - S.viewY) * S.zoom;
+    const cos = Math.cos(S.viewRot), sin = Math.sin(S.viewRot);
+    const rx = dx * cos - dy * sin;
+    const ry = dx * sin + dy * cos;
+    return { x: S.cw / 2 + rx, y: S.ch / 2 - ry };
+}
+function screenToWorldAt(sx, sy, vx, vy) {
+    const rx = sx - S.cw / 2;
+    const ry = S.ch / 2 - sy;
+    const cos = Math.cos(S.viewRot), sin = Math.sin(S.viewRot);
+    const dx = rx * cos + ry * sin;
+    const dy = -rx * sin + ry * cos;
+    return { x: dx / S.zoom + vx, y: dy / S.zoom + vy };
+}
+function screenToWorld(sx, sy) {
+    return screenToWorldAt(sx, sy, S.viewX, S.viewY);
+}
+
+// ================================================================
+// 地图更新（去重，仅在变化时重新解码）
+// ================================================================
+function updateMap(b64, info) {
+    const head = b64.length + ':' + b64.slice(0, 32) + b64.slice(-32);
+    const isNew = !S.mapInfo ||
+        S.mapInfo.width !== info.width || S.mapInfo.height !== info.height ||
+        S.mapInfo.resolution !== info.resolution;
+    S.mapInfo = info;
+
+    if (head !== S.lastMapHead) {
+        S.lastMapHead = head;
+        const img = new Image();
+        img.onload = () => { S.mapImage = img; draw(); };
+        img.src = 'data:image/png;base64,' + b64;
+    }
+
+    // 首次 / 地图尺寸变化 → 自适应居中
+    if (isNew || !S.fitted) {
+        fitMap();
+        S.fitted = true;
+    }
+}
+
+function fitMap() {
+    if (!S.mapInfo) return;
+    const { width, height, resolution, origin_x, origin_y } = S.mapInfo;
+    const W = width * resolution, H = height * resolution;
+    S.viewX = origin_x + W / 2;
+    S.viewY = origin_y + H / 2;
+    const zx = (S.cw * 0.85) / W;
+    const zy = (S.ch * 0.85) / H;
+    S.zoom = Math.max(MINZ, Math.min(MAXZ, Math.min(zx, zy)));
+}
+
+// ================================================================
+// 渲染
+// ================================================================
+function applyViewTransform(ctx) {
+    // 世界坐标 → 屏幕：平移中心 + y 翻转 + 旋转 + 缩放 + 平移视图中心
+    ctx.translate(S.cw / 2, S.ch / 2);
+    ctx.scale(1, -1);
+    ctx.rotate(S.viewRot);
+    ctx.scale(S.zoom, S.zoom);
+    ctx.translate(-S.viewX, -S.viewY);
+}
+
+function draw() {
+    const cvs = $('mapCanvas');
+    const ctx = cvs.getContext('2d');
+    const W = S.cw, H = S.ch;
+    if (W < 20 || H < 20) return;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#fafafa';
+    ctx.fillRect(0, 0, W, H);
+
+    // 地图/路径/机器人/放置预览（世界坐标，统一走视图变换，旋转/翻转一致生效）
+    if (S.mapImage && S.mapInfo) {
+        ctx.save();
+        applyViewTransform(ctx);
+        drawMap(ctx);
+        drawPath(ctx);
+        if (S.robot) drawRobot(ctx);
+        if (S.placing) drawPlacing(ctx);
+        ctx.restore();
+    } else {
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '14px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('等待地图数据…（请确认后端与定位/建图已运行）', W / 2, H / 2);
+        ctx.textAlign = 'start';
+    }
+
+    // 比例尺（不随视图旋转/翻转）
+    drawScale(ctx);
+}
+
+function drawMap(ctx) {
+    const info = S.mapInfo;
+    const yaw = info.origin_yaw || 0;
+    if (Math.abs(yaw) > 0.001) {
+        console.warn('地图原点 yaw 非零:', yaw, '，暂按未旋转绘制');
+    }
+    // 图像像素(u,v) → 世界坐标：x=origin_x+u*res, y=origin_y+v*res（图南=世界南，正立）
+    ctx.save();
+    ctx.transform(info.resolution, 0, 0, info.resolution, info.origin_x, info.origin_y);
+    ctx.drawImage(S.mapImage, 0, 0);
+    ctx.restore();
+}
+
+function drawPath(ctx) {
+    if (!S.path || S.path.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = '#16a34a';
+    ctx.lineWidth = 2.2 / S.zoom;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash([8 / S.zoom, 5 / S.zoom]);
+    ctx.beginPath();
+    for (let i = 0; i < S.path.length; i++) {
+        const p = S.path[i];
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+}
+
+function drawRobot(ctx) {
+    const r = S.robot;
+    const yaw = r.yaw || 0;
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(yaw);   // 世界坐标（y 朝上）下，yaw 直接作为旋转角
+
+    const R = 9 / S.zoom;       // 主体半径
+    const L = 15 / S.zoom;      // 方向箭头长度
+    const W = 6 / S.zoom;       // 方向箭头半宽
+
+    ctx.fillStyle = '#16a34a';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.4 / S.zoom;
+    ctx.lineJoin = 'round';
+
+    // 方向箭头（向前 +x）
+    ctx.beginPath();
+    ctx.moveTo(R + L, 0);
+    ctx.lineTo(R, -W);
+    ctx.lineTo(R, W);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // 主体圆点（覆盖箭头根部）
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+function drawPlacing(ctx) {
+    const pl = S.placing;
+    const isPose = S.interactMode === 'set_pose';
+    const color = isPose ? '#3b82f6' : '#ef4444';
+    const ang = Math.atan2(pl.cy - pl.y, pl.cx - pl.x);
+
+    // 起点：小圆点
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(pl.x, pl.y, 4 / S.zoom, 0, Math.PI * 2); ctx.fill();
+
+    // 引导线（细、半透明）
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 1.5 / S.zoom;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(pl.x, pl.y); ctx.lineTo(pl.cx, pl.cy); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // 箭头（实心三角）
+    const len = 14 / S.zoom, hw = 5.5 / S.zoom;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(pl.cx, pl.cy);
+    ctx.lineTo(pl.cx - len * Math.cos(ang - 0.45), pl.cy - len * Math.sin(ang - 0.45));
+    ctx.lineTo(pl.cx - len * Math.cos(ang + 0.45), pl.cy - len * Math.sin(ang + 0.45));
+    ctx.closePath();
+    ctx.fill();
+}
+
+function drawScale(ctx) {
+    const px = 1.0 * S.zoom;
+    if (px < 30 || px > S.cw * 0.4) return;
+    const x = 12, y = S.ch - 22;
+    ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + px, y); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y - 5); ctx.lineTo(x, y + 5);
+    ctx.moveTo(x + px, y - 5); ctx.lineTo(x + px, y + 5);
+    ctx.stroke();
+    ctx.fillStyle = '#4b5563'; ctx.font = '11px system-ui';
+    ctx.fillText('1 m', x + px / 2 - 12, y - 7);
+}
+
+// ================================================================
+// 交互
+// ================================================================
+let panning = false, panSX = 0, panSY = 0, panVX = 0, panVY = 0;
+let rotating = false, rotStartAng = 0, rotStartRot = 0;
+
+function eventXY(e) {
+    const r = $('mapCanvas').getBoundingClientRect();
+    return { sx: e.clientX - r.left, sy: e.clientY - r.top };
+}
+
+function onDown(e) {
+    const wrap = $('mapWrap');
+    if (e.button === 1) {   // 中键：旋转地图
+        e.preventDefault();
+        rotating = true;
+        const m = eventXY(e);
+        rotStartAng = Math.atan2(m.sy - S.ch / 2, m.sx - S.cw / 2);
+        rotStartRot = S.viewRot;
+        wrap.classList.add('grabbing');
+        return;
+    }
+    if (S.interactMode === 'set_pose' || S.interactMode === 'set_goal') {
+        e.preventDefault();
+        const m = eventXY(e);
+        const w = screenToWorld(m.sx, m.sy);
+        S.placing = { x: w.x, y: w.y, cx: w.x, cy: w.y };
+        draw();
+        return;
+    }
+    // 普通平移
+    e.preventDefault();
+    panning = true;
+    const m = eventXY(e);
+    panSX = m.sx; panSY = m.sy;
+    panVX = S.viewX; panVY = S.viewY;
+    wrap.classList.add('grabbing');
+}
+
+function onMove(e) {
+    if (rotating) {
+        const m = eventXY(e);
+        const ang = Math.atan2(m.sy - S.ch / 2, m.sx - S.cw / 2);
+        S.viewRot = rotStartRot - (ang - rotStartAng);
+        draw(); refreshUI();
+        return;
+    }
+    const m = eventXY(e);
+    if (S.placing) {
+        e.preventDefault();
+        const w = screenToWorld(m.sx, m.sy);
+        S.placing.cx = w.x; S.placing.cy = w.y;
+        draw();
+        return;
+    }
+    if (panning) {
+        e.preventDefault();
+        const m = eventXY(e);
+        const w0 = screenToWorldAt(panSX, panSY, panVX, panVY);
+        const w1 = screenToWorldAt(m.sx, m.sy, panVX, panVY);
+        S.viewX = panVX + (w0.x - w1.x);
+        S.viewY = panVY + (w0.y - w1.y);
+        draw();
+    }
+}
+
+function onUp(e) {
+    const wrap = $('mapWrap');
+    if (rotating) { rotating = false; wrap.classList.remove('grabbing'); return; }
+    if (S.placing) {
+        e.preventDefault();
+        finishPlacing();
+    }
+    if (panning) {
+        panning = false;
+        wrap.classList.remove('grabbing');
+    }
+}
+
+function finishPlacing() {
+    if (!S.placing) return;
+    const { x, y, cx, cy } = S.placing;
+    const mode = S.interactMode;
+    S.placing = null;
+
+    // 拖拽距离（像素）< 阈值 → 朝向 0
+    const dragPx = Math.hypot((cx - x) * S.zoom, (cy - y) * S.zoom);
+    let yaw = Math.atan2(cy - y, cx - x);
+    if (dragPx < 8) yaw = 0;
+
+    if (mode === 'set_pose') sendPose(x, y, yaw);
+    else if (mode === 'set_goal') sendGoal(x, y, yaw);
+
+    exitInteractMode();
+    draw();
+}
+
+function onWheel(e) {
+    e.preventDefault();
+    const m = eventXY(e);
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    const w = screenToWorld(m.sx, m.sy);   // 缩放前鼠标下的世界点
+    S.zoom = Math.max(MINZ, Math.min(MAXZ, S.zoom * factor));
+    // 反推视图中心，使缩放后 w 仍落在鼠标下（含旋转角）
+    const rx = m.sx - S.cw / 2;
+    const ry = S.ch / 2 - m.sy;
+    const cos = Math.cos(S.viewRot), sin = Math.sin(S.viewRot);
+    const dx = rx * cos + ry * sin;
+    const dy = -rx * sin + ry * cos;
+    S.viewX = w.x - dx / S.zoom;
+    S.viewY = w.y - dy / S.zoom;
+    draw(); refreshUI();
+}
+
+// ================================================================
+// 动作
+// ================================================================
+async function sendPose(x, y, yaw) {
+    const r = await api('/api/initialpose', 'POST', { x, y, yaw });
+    const d = (yaw * 180 / Math.PI).toFixed(1);
+    if (r && r.success !== false) log(`初始位姿已发送 (${x.toFixed(2)}, ${y.toFixed(2)}) ${d}°`);
+    else log('初始位姿发送失败');
+}
+
+async function sendGoal(x, y, yaw) {
+    const r = await api('/api/navgoal', 'POST', { x, y, yaw });
+    const d = (yaw * 180 / Math.PI).toFixed(1);
+    if (r && r.success) log(`导航目标已发送 (${x.toFixed(2)}, ${y.toFixed(2)}) ${d}°`);
+    else log('导航目标发送失败，请确认导航程序已启动');
+}
+
+function setInteractMode(mode) {
+    if (S.interactMode === mode) { exitInteractMode(); return; }
+    S.interactMode = mode;
+    S.placing = null;
+    refreshUI(); draw();
+}
+function exitInteractMode() {
+    S.interactMode = 'view';
+    S.placing = null;
+    refreshUI(); draw();
+}
+
+// ================================================================
+// UI 刷新
+// ================================================================
+function refreshUI() {
+    // 导航程序
+    const navOn = S.nav2Running;
+    $('nav2Dot').className = 'dot' + (navOn ? ' on' : '');
+    $('nav2Label').textContent = navOn ? '运行中' : '已停止';
+    $$('#nav2Toggle button').forEach(b => b.classList.toggle('active', (b.dataset.v === 'on') === navOn));
+    $('nav2Card').classList.toggle('active', navOn);
+
+    // 手柄
+    const joyOn = S.cmdvelRunning;
+    $('joyDot').className = 'dot' + (joyOn ? ' on' : '');
+    $('joyLabel').textContent = joyOn ? '已启用' : '未启用';
+    $$('#joyToggle button').forEach(b => b.classList.toggle('active', (b.dataset.v === 'on') === joyOn));
+    $('joyCard').classList.toggle('active', joyOn);
+
+    // 导航目标 / 初始位姿 按钮状态与地图提示
+    const wrap = $('mapWrap');
+    const hint = $('mapHint');
+    const goalBtn = $('goalBtn');
+    const poseBtn = $('poseBtn');
+
+    if (S.interactMode === 'set_goal') {
+        wrap.className = 'map-wrap nav';
+        hint.textContent = '导航 — 按住拖拽设置目标点和方向';
+        hint.className = 'map-hint nav-on';
+        goalBtn.textContent = '取消设置';
+        goalBtn.className = 'btn btn-outline on';
+        $('goalCard').classList.add('active');
+        poseBtn.textContent = '修正位姿';
+        poseBtn.className = 'btn btn-blue';
+        $('poseCard').classList.remove('active');
+    } else if (S.interactMode === 'set_pose') {
+        wrap.className = 'map-wrap pose';
+        hint.textContent = '位姿 — 按住拖拽设置位姿和朝向';
+        hint.className = 'map-hint pose-on';
+        goalBtn.textContent = '设目标点';
+        goalBtn.className = 'btn btn-red';
+        $('goalCard').classList.remove('active');
+        poseBtn.textContent = '取消设置';
+        poseBtn.className = 'btn btn-outline on';
+        $('poseCard').classList.add('active');
+    } else {
+        wrap.className = 'map-wrap grab';
+        hint.textContent = S.mapInfo ? '拖拽平移 · 滚轮缩放 · 中键旋转' : '等待地图数据…';
+        hint.className = 'map-hint';
+        goalBtn.textContent = '设目标点';
+        goalBtn.className = 'btn btn-red';
+        $('goalCard').classList.remove('active');
+        poseBtn.textContent = '修正位姿';
+        poseBtn.className = 'btn btn-blue';
+        $('poseCard').classList.remove('active');
+    }
+
+    // 状态卡
+    if (S.robot) {
+        $('infoPos').textContent = `${S.robot.x.toFixed(2)}, ${S.robot.y.toFixed(2)} m`;
+        $('infoYaw').textContent = (S.robot.yaw * 180 / Math.PI).toFixed(1) + '°';
+    } else {
+        $('infoPos').textContent = '—';
+        $('infoYaw').textContent = '—';
+    }
+
+    $('zoomBadge').textContent = S.mapInfo ? Math.round(S.zoom) + ' px/m' : '—';
+}
+
+// ================================================================
+// 事件绑定
+// ================================================================
+function bindEvents() {
+    const wrap = $('mapWrap');
+    wrap.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+
+    // 导航程序
+    $$('#nav2Toggle button').forEach(b => b.addEventListener('click', async () => {
+        const on = b.dataset.v === 'on';
+        if (on === S.nav2Running) return;
+        log(on ? '正在启动导航程序…' : '正在停止导航程序…');
+        const r = await api('/api/nav2/' + (on ? 'start' : 'stop'), 'POST');
+        log((r && r.message) ? r.message : (on ? '导航程序已启动' : '导航程序已停止'));
+        refreshUI();
+    }));
+
+    // 建图（手动，弹出步骤）
+    $('mappingHelpBtn').addEventListener('click', () => {
+        alert(
+            '建图需在香橙派上手动执行（web 后端未开放建图接口）：\n\n' +
+            '1. SSH 登录香橙派，启动建图：\n   cd ~/slam_ws && ./start_mapping.sh\n\n' +
+            '2. 另开终端启动手柄遥控：\n   python3 ~/slam_ws/handle/joy.py\n\n' +
+            '3. 用手柄遥控轮椅遍历环境（走闭合路径利于回环）\n\n' +
+            '4. 保存地图：\n   ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: \'/home/orangepi/slam_ws/src/jt_chair/map/你的地图名\'}"\n\n' +
+            '5. 按 Ctrl+C 退出建图，并在定位/导航 launch 中把 map_file 改成新地图名'
+        );
+    });
+
+    // 手柄控制
+    $$('#joyToggle button').forEach(b => b.addEventListener('click', async () => {
+        const on = b.dataset.v === 'on';
+        if (on === S.cmdvelRunning) return;
+        log(on ? '正在启用手柄控制…' : '正在关闭手柄控制…');
+        const r = await api('/api/cmdvel/' + (on ? 'start' : 'stop'), 'POST');
+        log((r && r.message) ? r.message : (on ? '手柄控制已启用' : '手柄控制已关闭'));
+        refreshUI();
+    }));
+
+    // 导航目标 / 初始位姿 模式切换
+    $('goalBtn').addEventListener('click', () => setInteractMode('set_goal'));
+    $('poseBtn').addEventListener('click', () => setInteractMode('set_pose'));
+
+    // 记录房间
+    $$('#roomGrid button').forEach(b => b.addEventListener('click', async () => {
+        const room = b.dataset.room;
+        log('正在记录 ' + b.textContent.trim() + ' 坐标…');
+        const r = await api('/api/record_room', 'POST', { room });
+        log((r && r.message) ? r.message : '记录完成');
+    }));
+
+    // 复位视图
+    $('fitBtn').addEventListener('click', () => { fitMap(); draw(); refreshUI(); });
+
+    // 清空日志
+    $('clearLogBtn').addEventListener('click', () => { $('logText').textContent = '日志已清空'; });
+}
+
+// ================================================================
+// 画布尺寸
+// ================================================================
+function resizeCanvas() {
+    const cvs = $('mapCanvas');
+    const wrap = $('mapWrap');
+    const r = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.floor(r.width), H = Math.floor(r.height);
+    cvs.width = W * dpr; cvs.height = H * dpr;
+    cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+    cvs.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+    S.cw = W; S.ch = H;
+    draw();
+}
+
+// ================================================================
+// 初始化
+// ================================================================
+function init() {
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    bindEvents();
+    connectSocket();
+    startStatusPoll();
+    // 页面卸载（退出/刷新）时，若导航/手柄仍在运行，自动发送停止请求，避免进程孤儿化
+    window.addEventListener('beforeunload', () => {
+        if (S.nav2Running)  navigator.sendBeacon(SERVER + '/api/nav2/stop');
+        if (S.cmdvelRunning) navigator.sendBeacon(SERVER + '/api/cmdvel/stop');
+    });
+    refreshUI();
+    log('系统就绪 — 请确认香橙派 web 后端已启动（默认 :5000）');
+}
+
+init();
+</script>
+</body>
+</html>

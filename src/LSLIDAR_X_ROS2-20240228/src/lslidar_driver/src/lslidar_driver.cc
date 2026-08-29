@@ -722,10 +722,7 @@ namespace lslidar_driver
 		if (lidar_name == "N10" || lidar_name == "L10")
 			invalidValue--;
 		if (invalidValue <= 1)
-		{
-			delete packet_bytes;
-			return;
-		}
+			return; // 缓冲区由 polling() 统一 delete，此处不可释放（double free）
 
 		for (int num = 0; num < package_points; num++)
 		{
@@ -866,10 +863,7 @@ namespace lslidar_driver
 		if (lidar_name == "N10_P")
 			invalidValue--;
 		if (invalidValue <= 1)
-		{
-			delete packet_bytes;
-			return;
-		}
+			return; // 缓冲区由 polling() 统一 delete，此处不可释放（double free）
 
 		for (int num = 0; num < package_points; num++)
 		{
@@ -1016,6 +1010,8 @@ namespace lslidar_driver
 					for (int i = 0; i < count_num; i++)
 					{
 						int point_idx = round((360 - points[i].degree) * count_num / 360);
+						if (point_idx < 0 || point_idx >= scan_num) // 防止 degree==0 时越界写坏堆
+							continue;
 						if (points[i].range == 0.0)
 						{
 							scan->ranges[point_idx] = std::numeric_limits<float>::infinity();
